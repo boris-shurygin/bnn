@@ -9,6 +9,7 @@ import pytest
 
 from bioplast.runner import config_slug, git_provenance, make_run_id, run_config, run_queue
 from bioplast.runner.queue import collect_configs
+from bioplast.runner.run import _unique_dir
 
 BASE = {
     "session": "0.0",
@@ -155,13 +156,26 @@ def test_run_id_carries_tag_and_seed():
     assert "ses0.0" in run_id and "toy" in run_id
 
 
-def test_run_dirs_do_not_collide_within_one_second(tmp_path):
-    """Очередь на 4 воркерах стартует прогоны в одну и ту же секунду."""
+def test_dir_names_collide_into_suffix(tmp_path):
+    """Очередь на 4 воркерах стартует прогоны в одну и ту же секунду.
+
+    Проверяется сама логика разведения имён, а не два реальных прогона: те
+    расходятся по секундам, если машина окажется медленнее ожидаемого, и тест
+    начинает мерить скорость вместо поведения.
+    """
+    first = _unique_dir(tmp_path, "run")
+    first.mkdir()
+    second = _unique_dir(tmp_path, "run")
+
+    assert (first.name, second.name) == ("run", "run-2")
+
+
+def test_repeated_runs_never_overwrite_each_other(tmp_path):
     first = run_config(dict(BASE), runs_dir=tmp_path)
     second = run_config(dict(BASE), runs_dir=tmp_path)
 
     assert first != second
-    assert second.name.startswith(first.name)
+    assert (first / "metrics.json").exists() and (second / "metrics.json").exists()
 
 
 def test_config_slug_is_deterministic_and_timeless():
