@@ -1,0 +1,14 @@
+{
+  "session": "0.4",
+  "dataset": "mnist",
+  "model": "mlp-784-256-10",
+  "tag": "bp",
+  "experiment": "mnist_mlp_backprop",
+  "device": "auto",
+  "seed": 0,
+  "hidden": [256],
+  "epochs": 10,
+  "batch_size": 128,
+  "lr": 0.001,
+  "data_root": "data/mnist"
+}

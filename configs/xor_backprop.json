@@ -1,0 +1,14 @@
+{
+  "session": "0.3",
+  "dataset": "xor",
+  "model": "mlp-2-8-1",
+  "tag": "bp",
+  "experiment": "xor_backprop",
+  "device": "cpu",
+  "seed": 0,
+  "hidden": 8,
+  "steps": 2000,
+  "lr": 0.05,
+  "log_every": 25,
+  "loss_target": 0.05
+}
