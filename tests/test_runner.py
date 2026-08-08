@@ -2,11 +2,12 @@
 
 import json
 import re
+import subprocess
 from datetime import datetime
 
 import pytest
 
-from bioplast.runner import config_slug, make_run_id, run_config, run_queue
+from bioplast.runner import config_slug, git_provenance, make_run_id, run_config, run_queue
 from bioplast.runner.queue import collect_configs
 
 BASE = {
@@ -56,6 +57,45 @@ def test_run_logs_device_availability(tmp_path):
     assert metrics["env"]["device_spec"] == "cpu"
     # в логе полная дата, а не только время: разбирать прогон будут не сегодня
     assert re.search(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ", log, re.MULTILINE)
+
+
+def test_run_records_git_provenance(tmp_path):
+    """`runs/` не версионируется — без хеша результат не привязан к коду."""
+    run_dir = run_config(dict(BASE), runs_dir=tmp_path)
+
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    assert metrics["git"]["commit"] == head
+    assert metrics["git"]["branch"]
+    assert isinstance(metrics["git"]["dirty"], bool)
+    assert f"код: {head[:10]}" in (run_dir / "run.log").read_text(encoding="utf-8")
+
+
+def test_git_provenance_flags_uncommitted_changes(tmp_path):
+    """Флаг важнее хеша: при отладке правки не коммитятся, и хеш врёт."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for args in (["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"]):
+        subprocess.run(["git", "-C", str(repo), *args], check=True)
+    (repo / "a.txt").write_text("одна строка", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "a.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "init"], check=True)
+
+    assert git_provenance(repo)["dirty"] is False
+
+    (repo / "a.txt").write_text("другая строка", encoding="utf-8")
+    dirty = git_provenance(repo)
+
+    assert dirty["dirty"] is True
+    assert dirty["dirty_files"] == ["a.txt"]
+
+
+def test_git_provenance_survives_missing_repo(tmp_path):
+    """Отсутствие репозитория не должно ронять прогон."""
+    assert git_provenance(tmp_path) == {}
 
 
 def test_cpu_run_reports_no_gpu_memory(tmp_path):

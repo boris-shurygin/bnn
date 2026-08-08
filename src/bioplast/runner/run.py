@@ -15,6 +15,7 @@ import importlib
 import json
 import logging
 import re
+import subprocess
 import sys
 import time
 import traceback
@@ -189,6 +190,57 @@ def _log_environment(logger: logging.Logger, device: str, spec: str) -> dict[str
     return info
 
 
+def git_provenance(root: Path | None = None) -> dict[str, Any]:
+    """Чем посчитан результат: коммит, ветка, признак незакоммиченных правок.
+
+    `runs/` не версионируется, поэтому без этой записи через месяц по строке
+    «MNIST дал 94% при K=2» нечем восстановить код. Ветки делают дыру шире:
+    после `git branch -D` неудачной гипотезы её коммиты недостижимы, и хеш
+    остаётся единственной ниточкой (обычно к тегу `exp/<имя>`).
+
+    Флаг `dirty` не менее важен, чем хеш: при отладке правки не коммитятся, и
+    хеш врёт ровно тогда, когда точность нужнее всего.
+    """
+    root = root or project_root()
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if head.returncode != 0:
+            return {}
+        commit, _, branch = head.stdout.strip().partition("\n")
+
+        status = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}  # git не установлен или репозитория нет — не повод ронять прогон
+
+    changed = [line[3:] for line in status.stdout.splitlines() if line.strip()]
+    info: dict[str, Any] = {"commit": commit, "branch": branch, "dirty": bool(changed)}
+    if changed:
+        info["dirty_files"] = sorted(changed)[:20]
+    return info
+
+
+def _log_provenance(logger: logging.Logger, info: dict[str, Any]) -> None:
+    if not info:
+        logger.warning("git недоступен — прогон не привязан к состоянию кода")
+        return
+    logger.info("код: %s @ %s", info["commit"][:10], info["branch"])
+    if info["dirty"]:
+        logger.warning(
+            "в дереве незакоммиченные правки (%d файлов) — прогон точно не воспроизводим",
+            len(info.get("dirty_files", [])),
+        )
+
+
 def _gpu_usage(device: str, logger: logging.Logger) -> dict[str, Any]:
     """Пиковая VRAM за прогон — доказательство, что на карте что-то считалось.
 
@@ -285,6 +337,8 @@ def run_config(
     seed = int(config.get("seed", 0))
 
     logger.info("старт: %s", config.get("experiment"))
+    git = git_provenance()
+    _log_provenance(logger, git)
     env = _log_environment(logger, device, device_spec)
     _apply_backends(config, logger)
     _seed_everything(seed)
@@ -308,6 +362,7 @@ def run_config(
         "run_id": run_id,
         "status": status,
         "started_at": started_at.isoformat(timespec="seconds"),
+        "git": git,
         "config": config,
         "env": env,
         "duration_sec": round(duration, 3),
