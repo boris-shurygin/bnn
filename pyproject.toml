@@ -1,0 +1,41 @@
+[project]
+name = "bioplast"
+version = "0.1.0"
+description = "Биологически правдоподобное локальное обучение: three-factor правила с сегрегированным апикальным каналом"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "torch>=2.5",
+    "torchvision>=0.20",
+    "numpy>=1.26",
+    "matplotlib>=3.9",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bioplast"]
+
+# torch с CUDA на Windows: обычный PyPI отдаёт CPU-сборку молча (см. roadmap.md,
+# раздел «Платформа: Windows»). Индекс задан явно.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu124" }]
+torchvision = [{ index = "pytorch-cu124" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# `experiments` — не пакет для установки, но импортируется раннером и тестами
+pythonpath = ["."]
+addopts = "-q"

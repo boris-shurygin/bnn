@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# результаты прогонов и очередь — локальные.
+# Ведущий слэш обязателен: без него `data/` поглощает и `src/bioplast/data/`
+/runs/
+/queue/
+
+# датасеты качаются скриптом, в репозитории не лежат
+/data/
+
+.ipynb_checkpoints/
+notebooks/*.ipynb
