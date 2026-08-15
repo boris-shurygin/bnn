@@ -9,6 +9,7 @@ dependencies = [
     "torchvision>=0.20",
     "numpy>=1.26",
     "matplotlib>=3.9",
+    "fastapi[standard-no-fastapi-cloud-cli]>=0.141.1",
 ]
 
 [dependency-groups]
