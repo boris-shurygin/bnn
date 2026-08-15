@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 from bioplast.runner import ContractError, RunStatus
 from bioplast.runner.run import project_root
@@ -27,12 +30,15 @@ from bioplast.viz.repository import (
 def create_app(runs_dir: Path | str | None = None) -> FastAPI:
     root = Path(runs_dir) if runs_dir is not None else _default_runs_dir()
     repository = RunRepository(root)
+    viz_dir = Path(__file__).resolve().parent
+    templates = Jinja2Templates(directory=viz_dir / "templates")
     app = FastAPI(
         title="bioplast run visualizer",
         version="0.1.0",
         description="Read-only API файловых артефактов runs/<id>/.",
     )
     app.state.run_repository = repository
+    app.mount("/static", StaticFiles(directory=viz_dir / "static"), name="static")
 
     @app.exception_handler(RunNotFound)
     @app.exception_handler(ArtifactNotFound)
@@ -47,6 +53,31 @@ def create_app(runs_dir: Path | str | None = None) -> FastAPI:
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "runs_dir": str(repository.runs_dir)}
+
+    @app.get("/", include_in_schema=False)
+    def index() -> RedirectResponse:
+        return RedirectResponse("/runs")
+
+    @app.get("/runs", response_class=HTMLResponse, include_in_schema=False)
+    def runs_page(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(request=request, name="runs.html", context={})
+
+    @app.get("/runs/{run_id}", response_class=HTMLResponse, include_in_schema=False)
+    def run_page(request: Request, run_id: str) -> HTMLResponse:
+        repository.resolve_run(run_id)
+        return templates.TemplateResponse(
+            request=request,
+            name="run-detail.html",
+            context={"run_id": run_id},
+        )
+
+    @app.get("/assets/plotly.min.js", include_in_schema=False)
+    def plotly_javascript() -> Response:
+        return Response(
+            _plotly_javascript(),
+            media_type="text/javascript",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
 
     @app.get("/api/runs")
     def list_runs(
@@ -106,6 +137,13 @@ def create_app(runs_dir: Path | str | None = None) -> FastAPI:
 def _default_runs_dir() -> Path:
     configured = os.environ.get("BIOPLAST_RUNS_DIR")
     return Path(configured) if configured else project_root() / "runs"
+
+
+@lru_cache(maxsize=1)
+def _plotly_javascript() -> str:
+    from plotly.offline import get_plotlyjs
+
+    return get_plotlyjs()
 
 
 app = create_app()

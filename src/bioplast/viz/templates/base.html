@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>{% block title %}bioplast runs{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/runs" aria-label="К списку запусков">
+      <span class="brand-mark" aria-hidden="true">b</span>
+      <span>
+        <strong>bioplast</strong>
+        <small>run observatory</small>
+      </span>
+    </a>
+    <div class="topbar-state">
+      <span class="pulse" aria-hidden="true"></span>
+      локальный стенд
+    </div>
+  </header>
+  <main class="shell">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="footer">Файлы в <code>runs/&lt;id&gt;/</code> остаются источником истины.</footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

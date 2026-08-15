@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Запуски · bioplast{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Экспериментальный журнал</p>
+    <h1>Запуски</h1>
+    <p class="lede">Параметры, состояние и результаты всех воспроизводимых прогонов.</p>
+  </div>
+  <button class="button button-primary" id="refresh-runs" type="button">Обновить</button>
+</section>
+
+<section class="stats-grid" aria-label="Сводка запусков">
+  <article class="stat"><span>Всего</span><strong id="stat-total">—</strong></article>
+  <article class="stat"><span>Завершено</span><strong id="stat-completed">—</strong></article>
+  <article class="stat"><span>В работе</span><strong id="stat-running">—</strong></article>
+  <article class="stat stat-danger"><span>Ошибки</span><strong id="stat-failed">—</strong></article>
+</section>
+
+<section class="panel filters-panel">
+  <form id="run-filters" class="filters">
+    <label>Статус
+      <select name="status">
+        <option value="">Все</option>
+        <option value="running">В работе</option>
+        <option value="paused">Пауза</option>
+        <option value="completed">Завершён</option>
+        <option value="failed">Ошибка</option>
+        <option value="cancelled">Отменён</option>
+      </select>
+    </label>
+    <label>Эксперимент
+      <input name="experiment" list="experiment-options" placeholder="xor_backprop">
+      <datalist id="experiment-options"></datalist>
+    </label>
+    <label>Seed
+      <input name="seed" type="number" step="1" placeholder="любой">
+    </label>
+    <label>С даты
+      <input name="started_after" type="datetime-local">
+    </label>
+    <label>До даты
+      <input name="started_before" type="datetime-local">
+    </label>
+    <div class="filter-actions">
+      <button class="button" type="reset">Сбросить</button>
+      <button class="button button-primary" type="submit">Применить</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel table-panel">
+  <div class="panel-heading">
+    <div>
+      <h2>Каталог</h2>
+      <p id="catalog-caption">Загрузка…</p>
+    </div>
+    <label class="toggle"><input id="auto-refresh" type="checkbox" checked> автообновление</label>
+  </div>
+  <div id="catalog-error" class="notice notice-error hidden" role="alert"></div>
+  <div class="table-wrap">
+    <table class="runs-table">
+      <thead><tr><th>Запуск</th><th>Статус</th><th>Модель</th><th>Итог</th><th>Начало</th></tr></thead>
+      <tbody id="runs-body"><tr><td colspan="5" class="empty">Читаю runs/…</td></tr></tbody>
+    </table>
+  </div>
+</section>
+
+<section id="catalog-warnings" class="panel hidden">
+  <div class="panel-heading"><h2>Нечитаемые каталоги</h2></div>
+  <ul id="catalog-warning-list" class="warning-list"></ul>
+</section>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', path='/runs.js') }}" defer></script>{% endblock %}

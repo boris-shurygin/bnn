@@ -1,0 +1,91 @@
+"""Серверная часть UI V.3 и локальные assets без CDN."""
+
+import json
+
+from fastapi.testclient import TestClient
+
+from bioplast.viz.api import create_app
+
+
+def _client(tmp_path) -> tuple[TestClient, str]:
+    run_id = "20260815-120000-sesv.3-xor-mlp-s0"
+    run_dir = tmp_path / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    config = {"experiment": "xor_backprop", "dataset": "xor", "model": "mlp", "seed": 0}
+    metrics = {
+        "run_id": run_id,
+        "status": "ok",
+        "started_at": "2026-08-15T12:00:00+03:00",
+        "duration_sec": 1.0,
+        "config": config,
+        "git": {"commit": "abc", "branch": "test", "dirty": True},
+        "env": {"device": "cpu"},
+        "epochs": [{"step": 0, "loss/train": 0.7}],
+        "final": {"loss": 0.7},
+    }
+    (run_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    (run_dir / "run.log").write_text("ready\n", encoding="utf-8")
+    return TestClient(create_app(tmp_path / "runs")), run_id
+
+
+def test_root_redirects_to_run_catalog(tmp_path):
+    client, _ = _client(tmp_path)
+
+    response = client.get("/", follow_redirects=False)
+
+    assert response.status_code in {302, 307}
+    assert response.headers["location"] == "/runs"
+
+
+def test_catalog_page_loads_local_styles_and_script(tmp_path):
+    client, _ = _client(tmp_path)
+
+    page = client.get("/runs")
+    css = client.get("/static/app.css")
+    script = client.get("/static/runs.js")
+
+    assert page.status_code == css.status_code == script.status_code == 200
+    assert "Экспериментальный журнал" in page.text
+    assert "/static/app.css" in page.text and "/static/runs.js" in page.text
+    assert "fetch(`/api/runs?" in script.text
+
+
+def test_detail_page_uses_local_plotly_and_live_log_script(tmp_path):
+    client, run_id = _client(tmp_path)
+
+    page = client.get(f"/runs/{run_id}")
+    script = client.get("/static/run-detail.js")
+
+    assert page.status_code == script.status_code == 200
+    assert run_id in page.text
+    assert 'src="/assets/plotly.min.js"' in page.text
+    assert "cdn.plot.ly" not in page.text
+    assert "pollLog" in script.text and "Plotly.newPlot" in script.text
+
+
+def test_plotly_bundle_is_served_locally_and_cached(tmp_path):
+    client, _ = _client(tmp_path)
+
+    response = client.get("/assets/plotly.min.js")
+
+    assert response.status_code == 200
+    assert len(response.content) > 1_000_000
+    assert b"Plotly" in response.content[:10_000]
+    assert "immutable" in response.headers["cache-control"]
+
+
+def test_missing_run_page_is_404(tmp_path):
+    client, _ = _client(tmp_path)
+
+    response = client.get("/runs/missing")
+
+    assert response.status_code == 404
+
+
+def test_catalog_api_exposes_dirty_for_explicit_warning(tmp_path):
+    client, _ = _client(tmp_path)
+
+    item = client.get("/api/runs").json()["items"][0]
+
+    assert item["dirty"] is True

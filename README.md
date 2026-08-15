@@ -5,6 +5,7 @@
 
 - [docs/research-plan.md](docs/research-plan.md) — что и почему: гипотезы, архитектура, литература
 - [docs/roadmap.md](docs/roadmap.md) — план работ по сессиям
+- [docs/run-ui.md](docs/run-ui.md) — запуск и использование веб-интерфейса прогонов
 - [LOG.md](LOG.md) — журнал сессий
 - [CLAUDE.md](CLAUDE.md) — конвенции реализации
 
@@ -23,6 +24,10 @@ uv run python -m bioplast.runner queue --workers 3
 
 # графики из metrics.json
 uv run python -m bioplast.viz runs --all
+
+# локальный каталог прогонов и интерактивные графики
+uv run uvicorn bioplast.viz.api:app --reload
+# открыть http://127.0.0.1:8000/runs
 ```
 
 Каждый прогон пишет в свою папку `runs/<id>/`: `config.json`, `metrics.json`,
@@ -50,6 +55,8 @@ runs/20260808-095245-ses0.4-mnist-mlp-784-256-10-s0-bp/
 ## Текущее состояние
 
 Блок 0 закрыт: раннер с очередью, диагностика v0, графики, backprop-эталоны.
+В блоке V готовы контракт артефактов, read-only API и браузерный просмотр
+прогонов; следующий шаг — повторный запуск с изменённым конфигом.
 
 | Эталон | Результат |
 |---|---|

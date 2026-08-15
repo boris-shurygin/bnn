@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}{{ run_id }} · bioplast{% endblock %}
+{% block head %}<script src="/assets/plotly.min.js"></script>{% endblock %}
+{% block content %}
+<script id="run-id-data" type="application/json">{{ run_id | tojson }}</script>
+<nav class="breadcrumb"><a href="/runs">← Все запуски</a></nav>
+
+<section class="page-heading detail-heading">
+  <div>
+    <p class="eyebrow" id="run-experiment">Запуск</p>
+    <h1 class="run-title" id="run-title">{{ run_id }}</h1>
+    <div class="run-meta" id="run-meta">Загрузка манифеста…</div>
+  </div>
+  <span id="run-status" class="status status-loading">загрузка</span>
+</section>
+
+<div id="page-error" class="notice notice-error hidden" role="alert"></div>
+<div id="failed-notice" class="notice notice-error hidden"></div>
+<div id="dirty-notice" class="notice notice-warning hidden"></div>
+
+<section id="final-metrics" class="stats-grid detail-stats" aria-label="Итоговые метрики"></section>
+
+<section class="detail-grid">
+  <article class="panel">
+    <div class="panel-heading"><h2>Параметры</h2><span class="mono-label">config.json</span></div>
+    <div id="config-table" class="kv-table"><p class="empty">Загрузка…</p></div>
+  </article>
+  <article class="panel">
+    <div class="panel-heading"><h2>Окружение</h2><span class="mono-label">env</span></div>
+    <div id="env-table" class="kv-table"><p class="empty">Загрузка…</p></div>
+  </article>
+  <article class="panel">
+    <div class="panel-heading"><h2>Код</h2><span class="mono-label">git</span></div>
+    <div id="git-table" class="kv-table"><p class="empty">Загрузка…</p></div>
+  </article>
+</section>
+
+<section class="panel charts-panel">
+  <div class="panel-heading">
+    <div><h2>Метрики</h2><p>Масштабирование, hover и скрытие отдельных кривых доступны прямо на графиках.</p></div>
+  </div>
+  <div id="charts" class="charts-grid"><p class="empty">Загрузка метрик…</p></div>
+</section>
+
+<section class="panel log-panel">
+  <div class="panel-heading log-heading">
+    <div><h2>Лог</h2><p id="log-progress">Ожидание…</p></div>
+    <div class="log-controls">
+      <label class="toggle"><input id="follow-log" type="checkbox" checked> следить</label>
+      <label class="toggle"><input id="scroll-log" type="checkbox" checked> вниз</label>
+      <button class="button" id="reload-log" type="button">С начала</button>
+      <a class="button" id="download-log" href="#">Скачать</a>
+    </div>
+  </div>
+  <pre id="run-log" class="run-log" tabindex="0">Загрузка run.log…</pre>
+</section>
+
+<section class="panel">
+  <div class="panel-heading"><h2>Артефакты</h2><p id="artifact-count"></p></div>
+  <div id="artifact-list" class="artifact-list"><p class="empty">Загрузка…</p></div>
+</section>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', path='/run-detail.js') }}" defer></script>{% endblock %}

@@ -232,6 +232,9 @@ class RunRepository:
         final = metrics.get("final", {})
         if not isinstance(final, dict):
             final = {}
+        git = metrics.get("git", {})
+        if not isinstance(git, dict):
+            git = {}
         return {
             "run_id": manifest.run_id,
             "status": manifest.status.value,
@@ -245,6 +248,7 @@ class RunRepository:
             "duration_sec": manifest.duration_sec,
             "parent_run_id": manifest.parent_run_id,
             "adapted_from_legacy": manifest.adapted_from_legacy,
+            "dirty": bool(git.get("dirty", False)),
             "final": final,
         }
 

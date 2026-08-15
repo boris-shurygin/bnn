@@ -1,0 +1,230 @@
+"use strict";
+
+const runId = JSON.parse(document.querySelector("#run-id-data").textContent);
+const encodedRunId = encodeURIComponent(runId);
+const statusNames = {
+  queued: "в очереди", running: "в работе", paused: "пауза",
+  completed: "завершён", failed: "ошибка", cancelled: "отменён",
+};
+const terminalStatuses = new Set(["completed", "failed", "cancelled"]);
+let detail = null;
+let detailSignature = "";
+let logOffset = 0;
+let logLoading = false;
+
+function node(tag, className, text) {
+  const value = document.createElement(tag);
+  if (className) value.className = className;
+  if (text !== undefined) value.textContent = text;
+  return value;
+}
+
+function formatValue(value) {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return String(value);
+    return Math.abs(value) >= 1000 || (Math.abs(value) > 0 && Math.abs(value) < .001)
+      ? value.toExponential(3) : value.toLocaleString("ru-RU", { maximumFractionDigits: 6 });
+  }
+  if (typeof value === "object") return JSON.stringify(value, null, 2);
+  return String(value);
+}
+
+function formatDate(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? value : new Intl.DateTimeFormat("ru-RU", {
+    dateStyle: "medium", timeStyle: "medium",
+  }).format(date);
+}
+
+function formatBytes(value) {
+  if (value < 1024) return `${value} Б`;
+  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} КиБ`;
+  return `${(value / 1024 ** 2).toFixed(1)} МиБ`;
+}
+
+function renderKeyValues(selector, values) {
+  const container = document.querySelector(selector);
+  container.replaceChildren();
+  const entries = Object.entries(values || {});
+  if (!entries.length) {
+    container.append(node("p", "empty", "Нет данных"));
+    return;
+  }
+  for (const [key, value] of entries) {
+    const row = node("div", "kv-row");
+    row.append(node("div", "kv-key", key), node("div", "kv-value", formatValue(value)));
+    container.append(row);
+  }
+}
+
+function showNotice(selector, text) {
+  const notice = document.querySelector(selector);
+  notice.textContent = text;
+  notice.classList.toggle("hidden", !text);
+}
+
+function renderHeader(manifest, config, metrics) {
+  document.querySelector("#run-title").textContent = manifest.run_id;
+  document.querySelector("#run-experiment").textContent = manifest.experiment || "Запуск";
+  const status = document.querySelector("#run-status");
+  status.className = `status status-${manifest.status}`;
+  status.textContent = statusNames[manifest.status] || manifest.status;
+  const meta = [
+    config.dataset, config.model || config.name,
+    `seed ${config.seed ?? "—"}`, formatDate(manifest.started_at),
+    manifest.duration_sec == null ? null : `${formatValue(manifest.duration_sec)} с`,
+    manifest.adapted_from_legacy ? "legacy contract" : "contract v1",
+  ].filter(Boolean);
+  document.querySelector("#run-meta").textContent = meta.join(" · ");
+
+  const git = metrics.git || {};
+  const dirtyFiles = Array.isArray(git.dirty_files) ? git.dirty_files : [];
+  showNotice("#dirty-notice", git.dirty
+    ? `DIRTY RUN — результат нельзя точно воспроизвести.\n${dirtyFiles.join("\n")}` : "");
+  showNotice("#failed-notice", manifest.status === "failed"
+    ? `Прогон завершился ошибкой.\n${metrics.error || "Трассировка отсутствует."}` : "");
+}
+
+function renderFinal(values) {
+  const container = document.querySelector("#final-metrics");
+  container.replaceChildren();
+  const entries = Object.entries(values || {});
+  if (!entries.length) {
+    container.append(node("p", "empty", "Итоговые метрики ещё не записаны."));
+    return;
+  }
+  for (const [key, value] of entries) {
+    const card = node("article", "stat");
+    card.append(node("span", "", key), node("strong", "", formatValue(value)));
+    container.append(card);
+  }
+}
+
+function metricGroups(rows) {
+  if (!rows.length) return { stepKey: "step", groups: new Map() };
+  const stepKey = ["step", "epoch"].find(key => key in rows[0]) || Object.keys(rows[0])[0];
+  const groups = new Map();
+  for (const row of rows) {
+    for (const [key, value] of Object.entries(row)) {
+      if (key === stepKey || typeof value !== "number" || !Number.isFinite(value)) continue;
+      const group = key.includes("/") ? key.split("/", 1)[0] : "scalar";
+      if (!groups.has(group)) groups.set(group, new Map());
+      if (!groups.get(group).has(key)) groups.get(group).set(key, { x: [], y: [] });
+      groups.get(group).get(key).x.push(row[stepKey]);
+      groups.get(group).get(key).y.push(value);
+    }
+  }
+  return { stepKey, groups };
+}
+
+function renderCharts(metrics) {
+  const rows = Array.isArray(metrics.epochs) ? metrics.epochs : [];
+  const signature = JSON.stringify(rows);
+  if (signature === detailSignature) return;
+  detailSignature = signature;
+  const charts = document.querySelector("#charts");
+  charts.replaceChildren();
+  const { stepKey, groups } = metricGroups(rows);
+  if (!groups.size) {
+    charts.append(node("p", "empty", "Скалярных рядов пока нет."));
+    return;
+  }
+  for (const [group, series] of groups) {
+    const chart = node("div", "chart");
+    chart.setAttribute("aria-label", `График ${group}`);
+    charts.append(chart);
+    const traces = [...series.entries()].map(([key, points]) => ({
+      x: points.x, y: points.y, type: "scatter", mode: "lines+markers",
+      name: key.includes("/") ? key.split("/").slice(1).join("/") : key,
+      line: { width: 2 }, marker: { size: 4 }, hovertemplate: `${key}<br>${stepKey}=%{x}<br>%{y:.5g}<extra></extra>`,
+    }));
+    const allPositive = traces.every(trace => trace.y.every(value => value > 0));
+    const useLog = ["w_norm", "grad_norm", "act_rms", "act_max"].includes(group) && allPositive;
+    Plotly.newPlot(chart, traces, {
+      title: { text: group, font: { size: 14, color: "#dce9f0" }, x: .04 },
+      paper_bgcolor: "#0a151f", plot_bgcolor: "#0a151f", font: { color: "#8da4b5", size: 10 },
+      margin: { l: 54, r: 18, t: 46, b: 44 },
+      xaxis: { title: stepKey, gridcolor: "#1d3241", zerolinecolor: "#294254" },
+      yaxis: { type: useLog ? "log" : "linear", gridcolor: "#1d3241", zerolinecolor: "#294254" },
+      legend: { orientation: "h", y: 1.12, x: 1, xanchor: "right" },
+      hovermode: "x unified", uirevision: `${runId}:${group}`,
+    }, { responsive: true, displaylogo: false, scrollZoom: true });
+  }
+}
+
+function renderArtifacts(items) {
+  const container = document.querySelector("#artifact-list");
+  container.replaceChildren();
+  document.querySelector("#artifact-count").textContent = `${items.length} файлов`;
+  for (const item of items) {
+    const row = node("div", "artifact-row");
+    const link = node("a", "artifact-path", item.path);
+    link.href = `/api/runs/${encodedRunId}/artifacts/${item.path.split("/").map(encodeURIComponent).join("/")}`;
+    link.target = "_blank";
+    const time = node("time", "artifact-meta", formatDate(item.modified_at));
+    time.dateTime = item.modified_at;
+    row.append(link, node("span", "artifact-meta", formatBytes(item.size_bytes)), time);
+    container.append(row);
+  }
+}
+
+function renderDetail(payload) {
+  detail = payload;
+  renderHeader(payload.manifest, payload.config, payload.metrics);
+  renderFinal(payload.metrics.final || {});
+  renderKeyValues("#config-table", payload.config);
+  renderKeyValues("#env-table", payload.metrics.env || {});
+  renderKeyValues("#git-table", payload.metrics.git || {});
+  renderCharts(payload.metrics);
+  renderArtifacts(payload.artifacts || []);
+  const logPath = payload.manifest.artifacts.log || "run.log";
+  const encodedLogPath = logPath.split("/").map(encodeURIComponent).join("/");
+  document.querySelector("#download-log").href = `/api/runs/${encodedRunId}/artifacts/${encodedLogPath}`;
+}
+
+async function fetchDetail() {
+  try {
+    const response = await fetch(`/api/runs/${encodedRunId}`, { cache: "no-store" });
+    if (!response.ok) throw new Error((await response.json()).detail || `API ответил ${response.status}`);
+    renderDetail(await response.json());
+    showNotice("#page-error", "");
+  } catch (error) {
+    showNotice("#page-error", `Не удалось прочитать прогон: ${error.message}`);
+  }
+}
+
+async function pollLog(reset = false) {
+  if (logLoading) return;
+  logLoading = true;
+  const output = document.querySelector("#run-log");
+  if (reset) { logOffset = 0; output.textContent = ""; }
+  try {
+    const response = await fetch(`/api/runs/${encodedRunId}/log?offset=${logOffset}`, { cache: "no-store" });
+    if (response.status === 404) {
+      output.textContent = "run.log ещё не создан.";
+      return;
+    }
+    if (!response.ok) throw new Error(`API ответил ${response.status}`);
+    const payload = await response.json();
+    if (payload.text) output.textContent += payload.text;
+    logOffset = payload.next_offset;
+    document.querySelector("#log-progress").textContent = `${formatBytes(logOffset)} / ${formatBytes(payload.size_bytes)}`;
+    if (document.querySelector("#scroll-log").checked) output.scrollTop = output.scrollHeight;
+  } catch (error) {
+    document.querySelector("#log-progress").textContent = `Ошибка: ${error.message}`;
+  } finally {
+    logLoading = false;
+  }
+}
+
+document.querySelector("#reload-log").addEventListener("click", () => pollLog(true));
+setInterval(() => {
+  if (document.querySelector("#follow-log").checked) pollLog();
+}, 1500);
+setInterval(() => {
+  if (!detail || !terminalStatuses.has(detail.manifest.status)) fetchDetail();
+}, 5000);
+fetchDetail();
+pollLog(true);
