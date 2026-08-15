@@ -19,13 +19,21 @@ import subprocess
 import sys
 import time
 import traceback
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from bioplast.diagnostics.metrics import MetricsRecorder
-from bioplast.runner.contracts import RunManifest, RunStatus, utc_offset_iso, write_run_manifest
+from bioplast.runner.contracts import (
+    ContractError,
+    RunManifest,
+    RunStatus,
+    load_run_manifest,
+    utc_offset_iso,
+    write_run_manifest,
+)
 
 LOGGER_NAME = "bioplast.run"
 # Метка времени первой компонентой имени: лексикографическая сортировка папок
@@ -120,6 +128,18 @@ class RunContext:
         return self.run_dir / name
 
 
+class _ConsoleFormatter(logging.Formatter):
+    """Не даёт Windows-консоли уронить emit на символе вне её code page."""
+
+    def __init__(self, fmt: str, encoding: str | None) -> None:
+        super().__init__(fmt)
+        self.encoding = encoding or "utf-8"
+
+    def format(self, record: logging.LogRecord) -> str:
+        text = super().format(record).replace("→", "->").replace("←", "<-")
+        return text.encode(self.encoding, errors="replace").decode(self.encoding)
+
+
 def _setup_logging(run_dir: Path, run_id: str, label: str) -> logging.Logger:
     logger = logging.getLogger(f"{LOGGER_NAME}.{run_id}")
     logger.setLevel(logging.INFO)
@@ -137,7 +157,9 @@ def _setup_logging(run_dir: Path, run_id: str, label: str) -> logging.Logger:
     # В консоли префиксом идёт короткая метка без даты: при `--workers 4`
     # строки перемежаются, и различать надо конфигурации, а не секунды запуска.
     stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setFormatter(logging.Formatter(f"[{label}] %(message)s"))
+    stream_handler.setFormatter(
+        _ConsoleFormatter(f"[{label}] %(message)s", getattr(sys.stdout, "encoding", None))
+    )
     logger.addHandler(stream_handler)
 
     return logger
@@ -307,42 +329,145 @@ def _unique_dir(runs_dir: Path, run_id: str) -> Path:
     raise RuntimeError(f"не удалось подобрать имя папки для {run_id}")
 
 
-def run_config(
+def _reserve_run_dir(runs_dir: Path, run_id: str) -> Path:
+    """Атомарно резервирует имя, в том числе при параллельной очереди."""
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    candidate = runs_dir / run_id
+    for suffix in range(2, 100):
+        try:
+            candidate.mkdir()
+            return candidate
+        except FileExistsError:
+            candidate = runs_dir / f"{run_id}-{suffix}"
+    raise RuntimeError(f"не удалось подобрать имя папки для {run_id}")
+
+
+def validate_run_config(config: dict[str, Any]) -> None:
+    """Проверяет общий контракт конфига до создания каталога прогона.
+
+    Семантика параметров принадлежит конкретному эксперименту, но раннер может
+    заранее отсеять конфиги, которые иначе упадут ещё до его импорта.
+    """
+    if not isinstance(config, dict):
+        raise TypeError("конфиг должен быть JSON-объектом")
+    experiment = config.get("experiment")
+    if not isinstance(experiment, str) or not experiment.strip():
+        raise ValueError("experiment должен быть непустой строкой")
+    if "id" in config:
+        run_id = config["id"]
+        if (
+            not isinstance(run_id, str)
+            or not run_id
+            or run_id in {".", ".."}
+            or "/" in run_id
+            or "\\" in run_id
+        ):
+            raise ValueError("id должен быть именем одного каталога")
+    try:
+        json.dumps(config, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"конфиг должен содержать только конечные JSON-значения: {exc}") from exc
+    try:
+        int(config.get("seed", 0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("seed должен быть целым числом") from exc
+    if not isinstance(config.get("device", "auto"), str):
+        raise ValueError("device должен быть строкой")
+
+
+def prepare_run(
     config: dict[str, Any] | Path | str,
     runs_dir: Path | str | None = None,
+    *,
+    parent_run_id: str | None = None,
 ) -> Path:
-    """Выполнить один прогон. Возвращает папку прогона.
-
-    Исключение эксперимента не пробрасывается наружу: оно записывается в
-    `metrics.json` со `status: failed`, чтобы одна упавшая конфигурация не
-    роняла очередь целиком.
-    """
+    """Резервирует новый прогон и записывает манифест со статусом `queued`."""
     if isinstance(config, (str, Path)):
         config_path = Path(config)
         config = json.loads(config_path.read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        raise TypeError("конфиг должен быть JSON-объектом")
+    prepared = deepcopy(config)
+    if parent_run_id is not None:
+        prepared["parent_run_id"] = parent_run_id
+    validate_run_config(prepared)
 
-    runs_dir = Path(runs_dir) if runs_dir else project_root() / "runs"
-    started_at = datetime.now().astimezone()
-    run_id = make_run_id(config, started_at)
-    run_dir = _unique_dir(runs_dir, run_id)
-    run_id = run_dir.name  # мог получить суффикс при совпадении секунды
-    run_dir.mkdir(parents=True, exist_ok=True)
-
+    root = Path(runs_dir) if runs_dir else project_root() / "runs"
+    queued_at = datetime.now().astimezone()
+    run_dir = _reserve_run_dir(root, make_run_id(prepared, queued_at))
+    run_id = run_dir.name
     (run_dir / "config.json").write_text(
-        json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps(prepared, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-
-    manifest = RunManifest(
-        run_id=run_id,
-        status=RunStatus.RUNNING,
-        experiment=str(config["experiment"]) if config.get("experiment") is not None else None,
-        started_at=started_at.isoformat(timespec="seconds"),
-        updated_at=started_at.isoformat(timespec="seconds"),
-        parent_run_id=(
-            str(config["parent_run_id"]) if config.get("parent_run_id") is not None else None
+    write_run_manifest(
+        run_dir,
+        RunManifest(
+            run_id=run_id,
+            status=RunStatus.QUEUED,
+            experiment=prepared["experiment"],
+            started_at=None,
+            updated_at=queued_at.isoformat(timespec="seconds"),
+            parent_run_id=(
+                str(prepared["parent_run_id"])
+                if prepared.get("parent_run_id") is not None
+                else None
+            ),
         ),
     )
+    return run_dir
+
+
+def fail_prepared_run(run_dir: Path | str, error: str) -> None:
+    """Фиксирует сбой очереди/воркера, чтобы прогон не завис в active-статусе."""
+    run_dir = Path(run_dir).resolve()
+    manifest = load_run_manifest(run_dir)
+    if manifest.status.terminal:
+        return
+    config_path = run_dir / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    metrics_path = run_dir / "metrics.json"
+    if not metrics_path.exists():
+        metrics_path.write_text(
+            json.dumps(
+                {
+                    "run_id": run_dir.name,
+                    "status": "failed",
+                    "config": config,
+                    "error": error,
+                    "epochs": [],
+                    "final": {},
+                },
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    write_run_manifest(run_dir, manifest.finish(RunStatus.FAILED, 0.0))
+
+
+def run_prepared(run_dir: Path | str) -> Path:
+    """Выполняет атомарно подготовленный прогон из существующей очереди."""
+    run_dir = Path(run_dir).resolve()
+    manifest = load_run_manifest(run_dir)
+    if manifest.run_id != run_dir.name:
+        raise ContractError("run_id подготовленного прогона не совпадает с каталогом")
+    if manifest.status is not RunStatus.QUEUED:
+        raise ContractError(f"ожидался статус queued, получен {manifest.status.value}")
+    config = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
+    validate_run_config(config)
+
+    started_at = datetime.now().astimezone()
+    manifest = RunManifest(
+        run_id=manifest.run_id,
+        status=RunStatus.RUNNING,
+        experiment=manifest.experiment,
+        started_at=started_at.isoformat(timespec="seconds"),
+        updated_at=started_at.isoformat(timespec="seconds"),
+        parent_run_id=manifest.parent_run_id,
+        artifacts=manifest.artifacts,
+    )
     write_run_manifest(run_dir, manifest)
+    run_id = run_dir.name
 
     logger = _setup_logging(run_dir, run_id, "-".join(describe_config(config)))
     device_spec = str(config.get("device", "auto"))
@@ -400,3 +525,16 @@ def run_config(
     logger.handlers.clear()
 
     return run_dir
+
+
+def run_config(
+    config: dict[str, Any] | Path | str,
+    runs_dir: Path | str | None = None,
+) -> Path:
+    """Выполнить один прогон. Возвращает папку прогона.
+
+    Исключение эксперимента не пробрасывается наружу: оно записывается в
+    `metrics.json` со `status: failed`, чтобы одна упавшая конфигурация не
+    роняла очередь целиком.
+    """
+    return run_prepared(prepare_run(config, runs_dir))

@@ -11,6 +11,9 @@ let detail = null;
 let detailSignature = "";
 let logOffset = 0;
 let logLoading = false;
+let logMissing = false;
+let rerunPreview = null;
+const rerunInputs = new Map();
 
 function node(tag, className, text) {
   const value = document.createElement(tag);
@@ -85,6 +88,15 @@ function renderHeader(manifest, config, metrics) {
     ? `DIRTY RUN — результат нельзя точно воспроизвести.\n${dirtyFiles.join("\n")}` : "");
   showNotice("#failed-notice", manifest.status === "failed"
     ? `Прогон завершился ошибкой.\n${metrics.error || "Трассировка отсутствует."}` : "");
+  const parentNotice = document.querySelector("#parent-notice");
+  parentNotice.replaceChildren();
+  parentNotice.classList.toggle("hidden", !manifest.parent_run_id);
+  if (manifest.parent_run_id) {
+    parentNotice.append("Повторный запуск от ");
+    const parentLink = node("a", "run-link", manifest.parent_run_id);
+    parentLink.href = `/runs/${encodeURIComponent(manifest.parent_run_id)}`;
+    parentNotice.append(parentLink);
+  }
 }
 
 function renderFinal(values) {
@@ -199,15 +211,17 @@ async function pollLog(reset = false) {
   if (logLoading) return;
   logLoading = true;
   const output = document.querySelector("#run-log");
-  if (reset) { logOffset = 0; output.textContent = ""; }
+  if (reset) { logOffset = 0; logMissing = false; output.textContent = ""; }
   try {
     const response = await fetch(`/api/runs/${encodedRunId}/log?offset=${logOffset}`, { cache: "no-store" });
     if (response.status === 404) {
       output.textContent = "run.log ещё не создан.";
+      logMissing = true;
       return;
     }
     if (!response.ok) throw new Error(`API ответил ${response.status}`);
     const payload = await response.json();
+    if (logMissing) { output.textContent = ""; logMissing = false; }
     if (payload.text) output.textContent += payload.text;
     logOffset = payload.next_offset;
     document.querySelector("#log-progress").textContent = `${formatBytes(logOffset)} / ${formatBytes(payload.size_bytes)}`;
@@ -219,6 +233,152 @@ async function pollLog(reset = false) {
   }
 }
 
+function rerunControl(field, index) {
+  const id = `rerun-field-${index}`;
+  const value = field.value;
+  let input;
+  if (typeof value === "boolean") {
+    input = document.createElement("select");
+    for (const optionValue of [true, false]) {
+      const option = document.createElement("option");
+      option.value = String(optionValue);
+      option.textContent = String(optionValue);
+      option.selected = value === optionValue;
+      input.append(option);
+    }
+  } else if (typeof value === "number") {
+    input = document.createElement("input");
+    input.type = "number";
+    input.step = Number.isInteger(value) ? "1" : "any";
+    input.value = String(value);
+  } else if (Array.isArray(value)) {
+    input = document.createElement("textarea");
+    input.rows = 2;
+    input.value = JSON.stringify(value);
+  } else {
+    input = document.createElement("input");
+    input.type = "text";
+    input.value = value === null ? "null" : String(value);
+  }
+  input.id = id;
+  input.dataset.rerunKey = field.key;
+  input.addEventListener("input", renderRerunDiff);
+  input.addEventListener("change", renderRerunDiff);
+  rerunInputs.set(field.key, { input, original: value });
+
+  const row = node("div", "rerun-field");
+  const label = document.createElement("label");
+  label.htmlFor = id;
+  label.append(node("strong", "", field.key), node("span", "", Array.isArray(value) ? "array" : typeof value));
+  row.append(label, input);
+  return row;
+}
+
+function parseRerunValue(input, original) {
+  if (typeof original === "boolean") return input.value === "true";
+  if (typeof original === "number") {
+    const value = Number(input.value);
+    if (!Number.isFinite(value) || (Number.isInteger(original) && !Number.isInteger(value))) {
+      throw new Error(`${input.dataset.rerunKey}: ожидалось ${Number.isInteger(original) ? "целое" : "число"}`);
+    }
+    return value;
+  }
+  if (Array.isArray(original)) {
+    const value = JSON.parse(input.value);
+    if (!Array.isArray(value)) throw new Error(`${input.dataset.rerunKey}: ожидался JSON-массив`);
+    return value;
+  }
+  if (original === null) return JSON.parse(input.value);
+  return input.value;
+}
+
+function collectRerunConfig() {
+  const config = JSON.parse(JSON.stringify(rerunPreview.config));
+  for (const [key, state] of rerunInputs) {
+    config[key] = parseRerunValue(state.input, state.original);
+  }
+  return config;
+}
+
+function renderRerunDiff() {
+  if (!rerunPreview) return;
+  const container = document.querySelector("#rerun-diff");
+  container.replaceChildren();
+  try {
+    const config = collectRerunConfig();
+    const changed = Object.keys(config).filter(key =>
+      JSON.stringify(config[key]) !== JSON.stringify(rerunPreview.config[key]));
+    if (!changed.length) {
+      container.append(node("p", "empty", "Параметры не изменены — можно повторить конфиг без правок."));
+    } else {
+      for (const key of changed) {
+        const row = node("div", "rerun-diff-row");
+        row.append(
+          node("strong", "", key),
+          node("code", "rerun-before", formatValue(rerunPreview.config[key])),
+          node("span", "rerun-arrow", "→"),
+          node("code", "rerun-after", formatValue(config[key])),
+        );
+        container.append(row);
+      }
+    }
+    showNotice("#rerun-error", "");
+  } catch (error) {
+    container.append(node("p", "empty", "Исправьте значение, чтобы увидеть diff."));
+    showNotice("#rerun-error", error.message);
+  }
+}
+
+function renderRerunForm(preview) {
+  rerunPreview = preview;
+  rerunInputs.clear();
+  const fields = document.querySelector("#rerun-fields");
+  fields.replaceChildren();
+  const editable = preview.fields.filter(field => field.editable);
+  editable.forEach((field, index) => fields.append(rerunControl(field, index)));
+  const locked = preview.fields.filter(field => !field.editable).map(field => field.key);
+  showNotice("#rerun-message",
+    `${editable.length} параметров можно менять. Зафиксированы: ${locked.join(", ") || "нет"}.`);
+  document.querySelector("#rerun-form").classList.remove("hidden");
+  renderRerunDiff();
+}
+
+async function loadRerunPreview() {
+  try {
+    const response = await fetch(`/api/runs/${encodedRunId}/rerun`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || `API ответил ${response.status}`);
+    renderRerunForm(payload);
+  } catch (error) {
+    showNotice("#rerun-message", error.message);
+  }
+}
+
+document.querySelector("#rerun-reset").addEventListener("click", () => {
+  if (rerunPreview) renderRerunForm(rerunPreview);
+});
+document.querySelector("#rerun-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const submit = document.querySelector("#rerun-submit");
+  try {
+    const config = collectRerunConfig();
+    submit.disabled = true;
+    submit.textContent = "Ставим в очередь…";
+    const response = await fetch(`/api/runs/${encodedRunId}/rerun`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ config }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || `API ответил ${response.status}`);
+    window.location.assign(payload.location);
+  } catch (error) {
+    showNotice("#rerun-error", error.message);
+    submit.disabled = false;
+    submit.textContent = "Поставить в очередь";
+  }
+});
+
 document.querySelector("#reload-log").addEventListener("click", () => pollLog(true));
 setInterval(() => {
   if (document.querySelector("#follow-log").checked) pollLog();
@@ -228,3 +388,4 @@ setInterval(() => {
 }, 5000);
 fetchDetail();
 pollLog(true);
+loadRerunPreview();

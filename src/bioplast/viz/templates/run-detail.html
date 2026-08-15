@@ -17,6 +17,7 @@
 <div id="page-error" class="notice notice-error hidden" role="alert"></div>
 <div id="failed-notice" class="notice notice-error hidden"></div>
 <div id="dirty-notice" class="notice notice-warning hidden"></div>
+<div id="parent-notice" class="notice notice-info hidden"></div>
 
 <section id="final-metrics" class="stats-grid detail-stats" aria-label="Итоговые метрики"></section>
 
@@ -33,6 +34,31 @@
     <div class="panel-heading"><h2>Код</h2><span class="mono-label">git</span></div>
     <div id="git-table" class="kv-table"><p class="empty">Загрузка…</p></div>
   </article>
+</section>
+
+<section class="panel rerun-panel">
+  <div class="panel-heading">
+    <div>
+      <h2>Повторный запуск</h2>
+      <p>Клонирует конфиг, показывает изменения и ставит новую копию в очередь. Исходный прогон не меняется.</p>
+    </div>
+    <span class="mono-label">parent_run_id</span>
+  </div>
+  <div class="rerun-body">
+    <div id="rerun-message" class="notice notice-info">Проверяем доступные параметры…</div>
+    <form id="rerun-form" class="hidden">
+      <div id="rerun-fields" class="rerun-fields"></div>
+      <div class="rerun-diff-wrap">
+        <h3>Изменения</h3>
+        <div id="rerun-diff" class="rerun-diff"><p class="empty">Параметры не изменены.</p></div>
+      </div>
+      <div id="rerun-error" class="notice notice-error hidden" role="alert"></div>
+      <div class="rerun-actions">
+        <button class="button" id="rerun-reset" type="button">Вернуть исходные</button>
+        <button class="button button-primary" id="rerun-submit" type="submit">Поставить в очередь</button>
+      </div>
+    </form>
+  </div>
 </section>
 
 <section class="panel charts-panel">

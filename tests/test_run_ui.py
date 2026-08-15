@@ -64,6 +64,18 @@ def test_detail_page_uses_local_plotly_and_live_log_script(tmp_path):
     assert "pollLog" in script.text and "Plotly.newPlot" in script.text
 
 
+def test_detail_page_contains_rerun_form_and_live_diff(tmp_path):
+    client, run_id = _client(tmp_path)
+
+    page = client.get(f"/runs/{run_id}")
+    script = client.get("/static/run-detail.js")
+
+    assert "Повторный запуск" in page.text
+    assert "Поставить в очередь" in page.text
+    assert f"/api/runs/${{encodedRunId}}/rerun" in script.text
+    assert "renderRerunDiff" in script.text
+
+
 def test_plotly_bundle_is_served_locally_and_cached(tmp_path):
     client, _ = _client(tmp_path)
 

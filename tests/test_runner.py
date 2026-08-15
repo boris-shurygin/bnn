@@ -1,15 +1,28 @@
 """Раннер: контракт `конфиг → runs/<id>/`."""
 
 import json
+import logging
 import re
 import subprocess
+from concurrent.futures import Future
 from datetime import datetime
 
 import pytest
 
-from bioplast.runner import config_slug, git_provenance, make_run_id, run_config, run_queue
+from bioplast.runner import (
+    RunStatus,
+    RunScheduler,
+    config_slug,
+    git_provenance,
+    load_run_manifest,
+    make_run_id,
+    prepare_run,
+    run_config,
+    run_prepared,
+    run_queue,
+)
 from bioplast.runner.queue import collect_configs
-from bioplast.runner.run import _unique_dir
+from bioplast.runner.run import _ConsoleFormatter, _unique_dir
 
 BASE = {
     "session": "0.0",
@@ -43,6 +56,50 @@ def test_run_writes_expected_files(tmp_path):
     assert metrics["config"]["experiment"] == "_selftest"
 
 
+def test_prepared_run_is_visible_as_queued_before_execution(tmp_path):
+    run_dir = prepare_run({**BASE, "parent_run_id": "source-run"}, runs_dir=tmp_path)
+
+    queued = load_run_manifest(run_dir)
+    assert queued.status is RunStatus.QUEUED
+    assert queued.started_at is None
+    assert queued.parent_run_id == "source-run"
+    assert (run_dir / "config.json").exists()
+    assert not (run_dir / "run.log").exists()
+
+    completed_dir = run_prepared(run_dir)
+
+    assert completed_dir == run_dir
+    completed = load_run_manifest(run_dir)
+    assert completed.status is RunStatus.COMPLETED
+    assert completed.started_at is not None
+    assert completed.parent_run_id == "source-run"
+
+
+def test_scheduler_records_worker_crash_in_run_contract(tmp_path, monkeypatch):
+    class FailingExecutor:
+        def __init__(self, **_kwargs):
+            pass
+
+        def submit(self, _function, _path):
+            future = Future()
+            future.set_exception(RuntimeError("spawn failed"))
+            return future
+
+        def shutdown(self, **_kwargs):
+            pass
+
+    monkeypatch.setattr("bioplast.runner.queue.ProcessPoolExecutor", FailingExecutor)
+    run_dir = prepare_run(BASE, runs_dir=tmp_path)
+
+    scheduler = RunScheduler()
+    scheduler.submit(run_dir)
+
+    assert load_run_manifest(run_dir).status is RunStatus.FAILED
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    assert "spawn failed" in metrics["error"]
+    assert scheduler.pending == 0
+
+
 def test_run_logs_device_availability(tmp_path):
     """Проверка cuda пишется в каждый прогон: на Windows легко получить CPU-сборку."""
     run_dir = run_config(dict(BASE), runs_dir=tmp_path)
@@ -59,6 +116,15 @@ def test_run_logs_device_availability(tmp_path):
     assert metrics["env"]["device_spec"] == "cpu"
     # в логе полная дата, а не только время: разбирать прогон будут не сегодня
     assert re.search(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ", log, re.MULTILINE)
+
+
+def test_console_formatter_is_safe_for_windows_code_page():
+    record = logging.LogRecord("test", 20, __file__, 1, "архитектура 2→8→1", (), None)
+
+    rendered = _ConsoleFormatter("%(message)s", "cp1251").format(record)
+
+    assert rendered == "архитектура 2->8->1"
+    rendered.encode("cp1251")
 
 
 def test_run_records_git_provenance(tmp_path):

@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import json
 import os
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from pathlib import Path
+from threading import Lock
 from typing import Any, Iterable
 
 
@@ -46,6 +47,63 @@ def _worker(config_path: str, runs_dir: str | None) -> dict[str, Any]:
         "status": metrics.get("status"),
         "duration_sec": metrics.get("duration_sec"),
     }
+
+
+def _prepared_worker(run_dir: str) -> dict[str, Any]:
+    """Выполняет заранее зарезервированный queued-прогон."""
+    from bioplast.runner.run import run_prepared
+
+    path = run_prepared(Path(run_dir))
+    metrics = json.loads((path / "metrics.json").read_text(encoding="utf-8"))
+    return {
+        "run_dir": str(path),
+        "status": metrics.get("status"),
+        "duration_sec": metrics.get("duration_sec"),
+    }
+
+
+class RunScheduler:
+    """Долгоживущая очередь веб-приложения на том же ProcessPoolExecutor."""
+
+    def __init__(self, *, workers: int = 1) -> None:
+        if workers < 1:
+            raise ValueError("workers должен быть положительным")
+        self.workers = workers
+        self._executor: ProcessPoolExecutor | None = None
+        self._futures: dict[Future[dict[str, Any]], Path] = {}
+        self._lock = Lock()
+
+    def submit(self, run_dir: Path | str) -> None:
+        path = str(Path(run_dir).resolve())
+        with self._lock:
+            if self._executor is None:
+                self._executor = ProcessPoolExecutor(max_workers=self.workers)
+            future = self._executor.submit(_prepared_worker, path)
+            self._futures[future] = Path(path)
+        future.add_done_callback(self._discard)
+
+    def _discard(self, future: Future[dict[str, Any]]) -> None:
+        with self._lock:
+            run_dir = self._futures.pop(future, None)
+        if run_dir is None or future.cancelled():
+            return
+        error = future.exception()
+        if error is not None:
+            from bioplast.runner.run import fail_prepared_run
+
+            fail_prepared_run(run_dir, f"worker process crashed: {error!r}")
+
+    @property
+    def pending(self) -> int:
+        with self._lock:
+            return len(self._futures)
+
+    def shutdown(self) -> None:
+        with self._lock:
+            executor = self._executor
+            self._executor = None
+        if executor is not None:
+            executor.shutdown(wait=False)
 
 
 def run_queue(

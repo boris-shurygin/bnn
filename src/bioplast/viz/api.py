@@ -1,4 +1,4 @@
-"""Read-only HTTP API локального визуализатора прогонов.
+"""HTTP API локального визуализатора и очереди повторных прогонов.
 
 Запуск из корня проекта:
 
@@ -8,16 +8,19 @@
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Query, Request
+from pydantic import BaseModel
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from bioplast.runner import ContractError, RunStatus
+from bioplast.runner import ContractError, RunScheduler, RunStatus
 from bioplast.runner.run import project_root
 from bioplast.viz.repository import (
     ArtifactNotFound,
@@ -25,19 +28,46 @@ from bioplast.viz.repository import (
     RunRepository,
     UnsafeRunPath,
 )
+from bioplast.viz.rerun import (
+    QueueSubmissionError,
+    RerunService,
+    RerunValidationError,
+    RunNotRerunnable,
+)
 
 
-def create_app(runs_dir: Path | str | None = None) -> FastAPI:
+class RerunRequest(BaseModel):
+    config: dict[str, Any]
+
+
+def create_app(
+    runs_dir: Path | str | None = None,
+    *,
+    scheduler: Any | None = None,
+) -> FastAPI:
     root = Path(runs_dir) if runs_dir is not None else _default_runs_dir()
     repository = RunRepository(root)
+    scheduler = scheduler or RunScheduler(workers=_default_workers())
+    reruns = RerunService(repository, scheduler)
     viz_dir = Path(__file__).resolve().parent
     templates = Jinja2Templates(directory=viz_dir / "templates")
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        shutdown = getattr(scheduler, "shutdown", None)
+        if shutdown is not None:
+            shutdown()
+
     app = FastAPI(
         title="bioplast run visualizer",
         version="0.1.0",
-        description="Read-only API файловых артефактов runs/<id>/.",
+        description="API файловых артефактов runs/<id>/ и повторных запусков.",
+        lifespan=lifespan,
     )
     app.state.run_repository = repository
+    app.state.run_scheduler = scheduler
+    app.state.rerun_service = reruns
     app.mount("/static", StaticFiles(directory=viz_dir / "static"), name="static")
 
     @app.exception_handler(RunNotFound)
@@ -49,6 +79,24 @@ def create_app(runs_dir: Path | str | None = None) -> FastAPI:
     @app.exception_handler(ContractError)
     async def contract_error_handler(_request: Request, exc: ContractError) -> JSONResponse:
         return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+    @app.exception_handler(RerunValidationError)
+    async def rerun_validation_handler(
+        _request: Request, exc: RerunValidationError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+    @app.exception_handler(RunNotRerunnable)
+    async def rerun_conflict_handler(
+        _request: Request, exc: RunNotRerunnable
+    ) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(QueueSubmissionError)
+    async def queue_submission_handler(
+        _request: Request, exc: QueueSubmissionError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -108,6 +156,14 @@ def create_app(runs_dir: Path | str | None = None) -> FastAPI:
     def get_run(run_id: str) -> dict:
         return repository.get_run(run_id)
 
+    @app.get("/api/runs/{run_id}/rerun")
+    def preview_rerun(run_id: str) -> dict[str, Any]:
+        return reruns.preview(run_id)
+
+    @app.post("/api/runs/{run_id}/rerun", status_code=202)
+    def enqueue_rerun(run_id: str, request: RerunRequest) -> dict[str, Any]:
+        return reruns.enqueue(run_id, request.config)
+
     @app.get("/api/runs/{run_id}/metrics")
     def get_metrics(run_id: str) -> dict:
         return repository.get_metrics(run_id)
@@ -137,6 +193,14 @@ def create_app(runs_dir: Path | str | None = None) -> FastAPI:
 def _default_runs_dir() -> Path:
     configured = os.environ.get("BIOPLAST_RUNS_DIR")
     return Path(configured) if configured else project_root() / "runs"
+
+
+def _default_workers() -> int:
+    configured = os.environ.get("BIOPLAST_RUN_WORKERS", "1")
+    try:
+        return max(1, int(configured))
+    except ValueError:
+        return 1
 
 
 @lru_cache(maxsize=1)
