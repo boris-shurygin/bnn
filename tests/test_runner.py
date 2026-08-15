@@ -33,6 +33,7 @@ def test_run_writes_expected_files(tmp_path):
     run_dir = run_config(dict(BASE), runs_dir=tmp_path)
 
     assert (run_dir / "config.json").exists()
+    assert (run_dir / "run.json").exists()
     assert (run_dir / "run.log").exists()
 
     metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))

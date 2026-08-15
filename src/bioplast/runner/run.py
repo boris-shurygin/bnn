@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from bioplast.diagnostics.metrics import MetricsRecorder
+from bioplast.runner.contracts import RunManifest, RunStatus, utc_offset_iso, write_run_manifest
 
 LOGGER_NAME = "bioplast.run"
 # Метка времени первой компонентой имени: лексикографическая сортировка папок
@@ -321,7 +322,7 @@ def run_config(
         config = json.loads(config_path.read_text(encoding="utf-8"))
 
     runs_dir = Path(runs_dir) if runs_dir else project_root() / "runs"
-    started_at = datetime.now()
+    started_at = datetime.now().astimezone()
     run_id = make_run_id(config, started_at)
     run_dir = _unique_dir(runs_dir, run_id)
     run_id = run_dir.name  # мог получить суффикс при совпадении секунды
@@ -330,6 +331,18 @@ def run_config(
     (run_dir / "config.json").write_text(
         json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+
+    manifest = RunManifest(
+        run_id=run_id,
+        status=RunStatus.RUNNING,
+        experiment=str(config["experiment"]) if config.get("experiment") is not None else None,
+        started_at=started_at.isoformat(timespec="seconds"),
+        updated_at=started_at.isoformat(timespec="seconds"),
+        parent_run_id=(
+            str(config["parent_run_id"]) if config.get("parent_run_id") is not None else None
+        ),
+    )
+    write_run_manifest(run_dir, manifest)
 
     logger = _setup_logging(run_dir, run_id, "-".join(describe_config(config)))
     device_spec = str(config.get("device", "auto"))
@@ -374,6 +387,11 @@ def run_config(
 
     (run_dir / "metrics.json").write_text(
         json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    final_status = RunStatus.COMPLETED if status == "ok" else RunStatus.FAILED
+    write_run_manifest(
+        run_dir,
+        manifest.finish(final_status, duration, finished_at=utc_offset_iso()),
     )
     logger.info("готово: %s за %.2f с → %s", status, duration, run_dir)
 
