@@ -16,6 +16,7 @@ from bioplast.runner.run import (
     validate_run_config,
 )
 from bioplast.runner.contracts import (
+    CHECKPOINT_FILE,
     CONTRACT_VERSION,
     ConnectionSpec,
     ContractError,
@@ -25,6 +26,7 @@ from bioplast.runner.contracts import (
     RunManifest,
     RunStatus,
     TensorSpec,
+    TensorSummary,
     append_event,
     iter_events,
     load_model_manifest,
@@ -32,12 +34,21 @@ from bioplast.runner.contracts import (
     write_model_manifest,
     write_run_manifest,
 )
+from bioplast.runner.checkpoints import (
+    CHECKPOINT_VERSION,
+    load_training_checkpoint,
+    write_training_checkpoint,
+)
+from bioplast.runner.inspection import InspectionError, inspect_model, inspect_tensor
 from bioplast.runner.queue import RunScheduler, run_queue
 
 __all__ = [
     "CONTRACT_VERSION",
+    "CHECKPOINT_FILE",
+    "CHECKPOINT_VERSION",
     "ConnectionSpec",
     "ContractError",
+    "InspectionError",
     "LayerSpec",
     "ModelManifest",
     "RunEvent",
@@ -46,13 +57,17 @@ __all__ = [
     "RunScheduler",
     "RunStatus",
     "TensorSpec",
+    "TensorSummary",
     "append_event",
     "config_slug",
     "fail_prepared_run",
     "git_provenance",
+    "inspect_model",
+    "inspect_tensor",
     "iter_events",
     "load_model_manifest",
     "load_run_manifest",
+    "load_training_checkpoint",
     "make_run_id",
     "prepare_run",
     "run_config",
@@ -61,4 +76,5 @@ __all__ = [
     "validate_run_config",
     "write_model_manifest",
     "write_run_manifest",
+    "write_training_checkpoint",
 ]

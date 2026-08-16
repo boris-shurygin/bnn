@@ -44,6 +44,7 @@ def test_new_run_writes_versioned_terminal_manifest(tmp_path):
     assert manifest.started_at and manifest.finished_at
     assert manifest.duration_sec is not None
     assert manifest.artifacts["events"] == "events.jsonl"
+    assert manifest.artifacts["checkpoint"] == "checkpoint.pt"
     assert manifest.adapted_from_legacy is False
 
 

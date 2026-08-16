@@ -19,6 +19,7 @@ CONTRACT_VERSION = 1
 RUN_MANIFEST = "run.json"
 MODEL_MANIFEST = "model.json"
 EVENTS_FILE = "events.jsonl"
+CHECKPOINT_FILE = "checkpoint.pt"
 
 
 class ContractError(ValueError):
@@ -55,6 +56,7 @@ def default_artifacts() -> dict[str, str]:
         "model": MODEL_MANIFEST,
         "events": EVENTS_FILE,
         "snapshots": "snapshots",
+        "checkpoint": CHECKPOINT_FILE,
     }
 
 
@@ -138,18 +140,127 @@ class RunManifest:
 
 
 @dataclass(frozen=True)
+class TensorSummary:
+    element_count: int
+    finite_count: int
+    non_finite_count: int
+    minimum: float | None
+    maximum: float | None
+    mean: float | None
+    std: float | None
+    l1_norm: float | None
+    l2_norm: float | None
+    sparsity: float | None
+
+    def __post_init__(self) -> None:
+        if min(self.element_count, self.finite_count, self.non_finite_count) < 0:
+            raise ContractError("счётчики tensor summary не могут быть отрицательными")
+        if self.finite_count + self.non_finite_count != self.element_count:
+            raise ContractError("finite и non-finite должны покрывать весь тензор")
+        statistic_names = ("minimum", "maximum", "mean", "std", "l1_norm", "l2_norm")
+        for name in statistic_names:
+            value = getattr(self, name)
+            if value is not None and not math.isfinite(value):
+                raise ContractError(f"{name} в tensor summary должен быть конечным")
+        if self.finite_count and any(getattr(self, name) is None for name in statistic_names):
+            raise ContractError("для конечных элементов tensor summary требует все статистики")
+        if not self.finite_count and any(
+            getattr(self, name) is not None for name in statistic_names
+        ):
+            raise ContractError("без конечных элементов числовые статистики должны быть null")
+        if self.minimum is not None and self.maximum is not None and self.minimum > self.maximum:
+            raise ContractError("min tensor summary не может быть больше max")
+        if self.std is not None and self.std < 0:
+            raise ContractError("std tensor summary не может быть отрицательной")
+        if self.l1_norm is not None and self.l1_norm < 0:
+            raise ContractError("l1_norm tensor summary не может быть отрицательной")
+        if self.l2_norm is not None and self.l2_norm < 0:
+            raise ContractError("l2_norm tensor summary не может быть отрицательной")
+        if self.element_count and self.sparsity is None:
+            raise ContractError("непустой tensor summary требует sparsity")
+        if not self.element_count and self.sparsity is not None:
+            raise ContractError("пустой tensor summary должен иметь sparsity=null")
+        if self.sparsity is not None and not 0.0 <= self.sparsity <= 1.0:
+            raise ContractError("sparsity должна лежать в диапазоне [0, 1]")
+
+    def to_dict(self) -> dict[str, int | float | None]:
+        return {
+            "element_count": self.element_count,
+            "finite_count": self.finite_count,
+            "non_finite_count": self.non_finite_count,
+            "min": self.minimum,
+            "max": self.maximum,
+            "mean": self.mean,
+            "std": self.std,
+            "l1_norm": self.l1_norm,
+            "l2_norm": self.l2_norm,
+            "sparsity": self.sparsity,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> TensorSummary:
+        return cls(
+            element_count=int(value.get("element_count", -1)),
+            finite_count=int(value.get("finite_count", -1)),
+            non_finite_count=int(value.get("non_finite_count", -1)),
+            minimum=_optional_float(value.get("min")),
+            maximum=_optional_float(value.get("max")),
+            mean=_optional_float(value.get("mean")),
+            std=_optional_float(value.get("std")),
+            l1_norm=_optional_float(value.get("l1_norm")),
+            l2_norm=_optional_float(value.get("l2_norm")),
+            sparsity=_optional_float(value.get("sparsity")),
+        )
+
+
+@dataclass(frozen=True)
 class TensorSpec:
     name: str
     role: str
     shape: tuple[int | None, ...]
     dtype: str
+    requires_grad: bool | None = None
+    value_mode: str = "metadata"
+    summary: TensorSummary | None = None
+    values: Any = None
+    values_omitted_reason: str | None = None
 
     def __post_init__(self) -> None:
         if not self.name or not self.role or not self.dtype:
             raise ContractError("tensor name, role и dtype не могут быть пустыми")
+        if self.requires_grad is not None and not isinstance(self.requires_grad, bool):
+            raise ContractError("requires_grad должен быть bool или null")
+        if self.value_mode not in {"metadata", "summary", "full"}:
+            raise ContractError(f"неизвестный value_mode тензора: {self.value_mode!r}")
+        if self.value_mode == "metadata" and (self.summary is not None or self.values is not None):
+            raise ContractError("metadata-тензор не должен содержать summary или values")
+        if self.value_mode == "summary" and (self.summary is None or self.values is not None):
+            raise ContractError("summary-тензор должен содержать summary без values")
+        if self.value_mode == "full" and (self.summary is None or self.values is None):
+            raise ContractError("full-тензор должен содержать summary и values")
+        if self.value_mode == "full" and self.values_omitted_reason is not None:
+            raise ContractError("full-тензор не может иметь values_omitted_reason")
+        if self.value_mode == "metadata" and self.values_omitted_reason is not None:
+            raise ContractError("metadata-тензор не может иметь values_omitted_reason")
+        if self.values is not None:
+            value_shape = _json_tensor_shape(self.values)
+            if value_shape != self.shape:
+                raise ContractError(
+                    f"форма values {value_shape} не совпадает с tensor shape {self.shape}"
+                )
 
     def to_dict(self) -> dict[str, Any]:
-        return {"name": self.name, "role": self.role, "shape": list(self.shape), "dtype": self.dtype}
+        return {
+            "name": self.name,
+            "role": self.role,
+            "shape": list(self.shape),
+            "dtype": self.dtype,
+            "requires_grad": self.requires_grad,
+            "value_mode": self.value_mode,
+            "summary": self.summary.to_dict() if self.summary is not None else None,
+            "values": self.values,
+            "values_omitted_reason": self.values_omitted_reason,
+        }
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> TensorSpec:
@@ -159,6 +270,15 @@ class TensorSpec:
             role=str(value.get("role", "")),
             shape=shape,
             dtype=str(value.get("dtype", "")),
+            requires_grad=_optional_bool(value.get("requires_grad")),
+            value_mode=str(value.get("value_mode", "metadata")),
+            summary=(
+                TensorSummary.from_dict(value["summary"])
+                if value.get("summary") is not None
+                else None
+            ),
+            values=value.get("values"),
+            values_omitted_reason=_optional_str(value.get("values_omitted_reason")),
         )
 
 
@@ -210,6 +330,12 @@ class ConnectionSpec:
     target: str
     kind: str = "forward"
 
+    def __post_init__(self) -> None:
+        if not self.source or not self.target:
+            raise ContractError("source и target связи не могут быть пустыми")
+        if self.kind not in {"forward", "learning"}:
+            raise ContractError(f"неизвестный kind связи: {self.kind!r}")
+
     def to_dict(self) -> dict[str, str]:
         return {"source": self.source, "target": self.target, "kind": self.kind}
 
@@ -228,6 +354,9 @@ class ModelManifest:
     model_name: str
     layers: tuple[LayerSpec, ...]
     connections: tuple[ConnectionSpec, ...]
+    captured_at: str | None = None
+    capture_phase: str | None = None
+    step: int | None = None
     schema_version: int = CONTRACT_VERSION
     kind: str = "model"
 
@@ -235,6 +364,10 @@ class ModelManifest:
         _validate_header(self.schema_version, self.kind, "model")
         if not self.run_id or not self.model_name:
             raise ContractError("run_id и model_name не могут быть пустыми")
+        if not self.layers:
+            raise ContractError("модель должна содержать хотя бы один слой")
+        if self.step is not None and self.step < 0:
+            raise ContractError("step снимка модели не может быть отрицательным")
         layer_ids = [layer.layer_id for layer in self.layers]
         if len(layer_ids) != len(set(layer_ids)):
             raise ContractError("идентификаторы слоёв должны быть уникальными")
@@ -251,6 +384,9 @@ class ModelManifest:
             "kind": self.kind,
             "run_id": self.run_id,
             "model_name": self.model_name,
+            "captured_at": self.captured_at,
+            "capture_phase": self.capture_phase,
+            "step": self.step,
             "layers": [layer.to_dict() for layer in self.layers],
             "connections": [connection.to_dict() for connection in self.connections],
         }
@@ -261,6 +397,9 @@ class ModelManifest:
         return cls(
             run_id=str(value.get("run_id", "")),
             model_name=str(value.get("model_name", "")),
+            captured_at=_optional_str(value.get("captured_at")),
+            capture_phase=_optional_str(value.get("capture_phase")),
+            step=int(value["step"]) if value.get("step") is not None else None,
             layers=tuple(LayerSpec.from_dict(item) for item in value.get("layers", [])),
             connections=tuple(
                 ConnectionSpec.from_dict(item) for item in value.get("connections", [])
@@ -461,7 +600,8 @@ def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(
-        json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
+        encoding="utf-8",
     )
     temporary.replace(path)
 
@@ -498,8 +638,34 @@ def _optional_float(value: Any) -> float | None:
     return None if value is None else float(value)
 
 
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ContractError("ожидался bool или null")
+    return value
+
+
 def _shape_dim(value: Any) -> int | None:
-    return None if value is None else int(value)
+    if value is None:
+        return None
+    dimension = int(value)
+    if dimension < 0:
+        raise ContractError("размерность тензора не может быть отрицательной")
+    return dimension
+
+
+def _json_tensor_shape(value: Any) -> tuple[int, ...]:
+    if isinstance(value, list):
+        child_shapes = [_json_tensor_shape(item) for item in value]
+        if child_shapes and any(shape != child_shapes[0] for shape in child_shapes[1:]):
+            raise ContractError("values тензора не могут быть рваным массивом")
+        return (len(value), *(child_shapes[0] if child_shapes else ()))
+    if not isinstance(value, (bool, int, float)):
+        raise ContractError("values тензора допускает только конечные числа и bool")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ContractError("values тензора не допускает NaN и бесконечность")
+    return ()
 
 
 def _timestamp_from_run_id(run_id: str) -> str | None:

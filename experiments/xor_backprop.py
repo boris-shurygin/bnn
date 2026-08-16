@@ -14,6 +14,7 @@ import torch
 from torch import nn
 
 from bioplast.diagnostics.probes import log_module_state
+from bioplast.runner import inspect_model, write_model_manifest, write_training_checkpoint
 
 XOR_X = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]]
 XOR_Y = [0.0, 1.0, 1.0, 0.0]
@@ -98,6 +99,31 @@ def run(config: dict[str, Any], ctx) -> dict[str, Any]:
 
     solved = bool(accuracy == 1.0 and loss_value < loss_target)
     ctx.log.info("итог: loss=%.5f, acc=%.2f, solved=%s", loss_value, accuracy, solved)
+
+    write_training_checkpoint(
+        ctx.run_dir,
+        run_id=ctx.run_id,
+        experiment=str(config["experiment"]),
+        model_name=str(config.get("model", "xor-backprop")),
+        model=model,
+        optimizer=optimizer,
+        step=steps,
+    )
+    model_manifest = inspect_model(
+        model,
+        run_id=ctx.run_id,
+        model_name=str(config.get("model", "xor-backprop")),
+        example_args=(x,),
+        layer_ids={"layers.0": "hidden", "layers.1": "output"},
+        activations={"layers.0": "relu", "layers.1": "identity"},
+        capture_phase="completed",
+        step=steps,
+    )
+    write_model_manifest(ctx.run_dir, model_manifest)
+    ctx.log.info(
+        "модель экспортирована: checkpoint.pt и model.json (%d слоя)",
+        len(model_manifest.layers),
+    )
 
     return {
         "loss": loss_value,
