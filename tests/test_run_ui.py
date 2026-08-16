@@ -82,6 +82,22 @@ def test_detail_page_contains_rerun_form_and_live_diff(tmp_path):
     assert "renderRerunDiff" in script.text
 
 
+def test_detail_page_contains_cooperative_run_controls(tmp_path):
+    client, run_id = _client(tmp_path)
+
+    page = client.get(f"/runs/{run_id}")
+    script = client.get("/static/run-detail.js")
+    css = client.get("/static/app.css")
+
+    assert "Управление запуском" in page.text
+    assert 'data-run-command="pause"' in page.text
+    assert 'data-run-command="step"' in page.text
+    assert 'id="delay-ms"' in page.text
+    assert f"/api/runs/${{encodedRunId}}/control" in script.text
+    assert "issueControl" in script.text
+    assert ".control-actions" in css.text
+
+
 def test_detail_page_contains_model_graph_layer_and_tensor_views(tmp_path):
     client, run_id = _client(tmp_path)
 

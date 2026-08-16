@@ -67,6 +67,7 @@ def run(config: dict[str, Any], ctx) -> ExperimentResult:
     accuracy = 0.0
 
     for step in range(steps + 1):
+        ctx.control.checkpoint(step=step, phase="train_step")
         logits, acts = model(x, collect=True)
         loss = loss_fn(logits, y)
 

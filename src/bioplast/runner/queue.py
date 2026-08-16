@@ -98,6 +98,16 @@ class RunScheduler:
         with self._lock:
             return len(self._futures)
 
+    def cancel(self, run_dir: Path | str) -> bool:
+        """Снять queued-задачу с executor; running worker отменяется командой."""
+        target = Path(run_dir).resolve()
+        with self._lock:
+            future = next(
+                (item for item, path in self._futures.items() if path == target),
+                None,
+            )
+        return bool(future is not None and future.cancel())
+
     def shutdown(self) -> None:
         with self._lock:
             executor = self._executor

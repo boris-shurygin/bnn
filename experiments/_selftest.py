@@ -22,6 +22,7 @@ def run(config: dict[str, Any], ctx) -> ExperimentResult:
 
     steps = int(config.get("steps", 3))
     for step in range(steps):
+        ctx.control.checkpoint(step=step, phase="step")
         ctx.metrics.update(step, {"loss/train": 1.0 / (step + 1), "w_norm/fc1": 1.0 + step})
 
     return ExperimentResult(final={"steps": steps, "device": ctx.device})

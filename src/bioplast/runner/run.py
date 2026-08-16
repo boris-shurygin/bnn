@@ -36,6 +36,7 @@ from bioplast.runner.contracts import (
     utc_offset_iso,
     write_run_manifest,
 )
+from bioplast.runner.control import CooperativeRunControl, RunCancelled
 from bioplast.runner.experiment import ExperimentResult, finalize_experiment
 
 LOGGER_NAME = "bioplast.run"
@@ -124,6 +125,7 @@ class RunContext:
     device: str
     seed: int
     log: logging.Logger
+    control: CooperativeRunControl
     metrics: MetricsRecorder = field(default_factory=MetricsRecorder)
 
     def artifact(self, name: str) -> Path:
@@ -450,6 +452,33 @@ def fail_prepared_run(run_dir: Path | str, error: str) -> None:
     write_run_manifest(run_dir, manifest.finish(RunStatus.FAILED, 0.0))
 
 
+def cancel_prepared_run(run_dir: Path | str) -> bool:
+    """Отменить ещё не стартовавший queued-прогон и сохранить терминальный контракт."""
+    run_dir = Path(run_dir).resolve()
+    manifest = load_run_manifest(run_dir)
+    if manifest.status is not RunStatus.QUEUED:
+        return False
+    config = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
+    metrics_path = run_dir / "metrics.json"
+    if not metrics_path.exists():
+        metrics_path.write_text(
+            json.dumps(
+                {
+                    "run_id": run_dir.name,
+                    "status": "cancelled",
+                    "config": config,
+                    "epochs": [],
+                    "final": {},
+                },
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    write_run_manifest(run_dir, manifest.finish(RunStatus.CANCELLED, 0.0))
+    return True
+
+
 def run_prepared(run_dir: Path | str) -> Path:
     """Выполняет атомарно подготовленный прогон из существующей очереди."""
     run_dir = Path(run_dir).resolve()
@@ -487,13 +516,21 @@ def run_prepared(run_dir: Path | str) -> Path:
     _seed_everything(seed)
     logger.info("seed = %d", seed)
 
-    ctx = RunContext(run_id=run_id, run_dir=run_dir, device=device, seed=seed, log=logger)
+    ctx = RunContext(
+        run_id=run_id,
+        run_dir=run_dir,
+        device=device,
+        seed=seed,
+        log=logger,
+        control=CooperativeRunControl(run_dir, logger=logger),
+    )
 
     started = time.perf_counter()
     status, final, error = "ok", {}, None
     try:
         module = load_experiment(str(config["experiment"]))
         result = module.run(config, ctx)
+        ctx.control.checkpoint(phase="finalize", apply_delay=False)
         final = finalize_experiment(
             result,
             config=config,
@@ -501,6 +538,9 @@ def run_prepared(run_dir: Path | str) -> Path:
             run_dir=run_dir,
             logger=logger,
         )
+    except RunCancelled:
+        status = "cancelled"
+        logger.info("прогон кооперативно отменён в безопасной точке")
     except Exception:
         status = "failed"
         error = traceback.format_exc()
@@ -525,7 +565,10 @@ def run_prepared(run_dir: Path | str) -> Path:
     (run_dir / "metrics.json").write_text(
         json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    final_status = RunStatus.COMPLETED if status == "ok" else RunStatus.FAILED
+    final_status = {
+        "ok": RunStatus.COMPLETED,
+        "cancelled": RunStatus.CANCELLED,
+    }.get(status, RunStatus.FAILED)
     write_run_manifest(
         run_dir,
         manifest.finish(final_status, duration, finished_at=utc_offset_iso()),

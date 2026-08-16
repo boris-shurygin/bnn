@@ -26,9 +26,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from bioplast.runner import ContractError, RunScheduler, RunStatus
+from bioplast.runner import ContractError, RunCommandType, RunScheduler, RunStatus
 from bioplast.runner.run import project_root
 from bioplast.viz.comparison import RunComparisonError, compare_runs
+from bioplast.viz.control import (
+    RunControlConflict,
+    RunControlService,
+    RunControlValidationError,
+)
 from bioplast.viz.repository import (
     ArtifactNotFound,
     RunNotFound,
@@ -47,6 +52,11 @@ class RerunRequest(BaseModel):
     config: dict[str, Any]
 
 
+class RunControlRequest(BaseModel):
+    command: RunCommandType
+    delay_ms: int | None = None
+
+
 def create_app(
     runs_dir: Path | str | None = None,
     *,
@@ -56,6 +66,7 @@ def create_app(
     repository = RunRepository(root)
     scheduler = scheduler or RunScheduler(workers=_default_workers())
     reruns = RerunService(repository, scheduler)
+    controls = RunControlService(repository, scheduler)
     viz_dir = Path(__file__).resolve().parent
     templates = Jinja2Templates(directory=viz_dir / "templates")
 
@@ -75,6 +86,7 @@ def create_app(
     app.state.run_repository = repository
     app.state.run_scheduler = scheduler
     app.state.rerun_service = reruns
+    app.state.run_control_service = controls
     app.mount("/static", StaticFiles(directory=viz_dir / "static"), name="static")
 
     @app.exception_handler(RunNotFound)
@@ -110,6 +122,18 @@ def create_app(
         _request: Request, exc: RunComparisonError
     ) -> JSONResponse:
         return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+    @app.exception_handler(RunControlValidationError)
+    async def control_validation_handler(
+        _request: Request, exc: RunControlValidationError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+    @app.exception_handler(RunControlConflict)
+    async def control_conflict_handler(
+        _request: Request, exc: RunControlConflict
+    ) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -187,6 +211,18 @@ def create_app(
     @app.post("/api/runs/{run_id}/rerun", status_code=202)
     def enqueue_rerun(run_id: str, request: RerunRequest) -> dict[str, Any]:
         return reruns.enqueue(run_id, request.config)
+
+    @app.get("/api/runs/{run_id}/control")
+    def get_run_control(run_id: str) -> dict[str, Any]:
+        return controls.state(run_id)
+
+    @app.post("/api/runs/{run_id}/control", status_code=202)
+    def control_run(run_id: str, request: RunControlRequest) -> dict[str, Any]:
+        return controls.issue(
+            run_id,
+            request.command,
+            delay_ms=request.delay_ms,
+        )
 
     @app.get("/api/runs/{run_id}/metrics")
     def get_metrics(run_id: str) -> dict:

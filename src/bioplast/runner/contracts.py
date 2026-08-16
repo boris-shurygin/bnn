@@ -19,6 +19,7 @@ CONTRACT_VERSION = 1
 RUN_MANIFEST = "run.json"
 MODEL_MANIFEST = "model.json"
 EVENTS_FILE = "events.jsonl"
+COMMANDS_FILE = "commands.jsonl"
 CHECKPOINT_FILE = "checkpoint.pt"
 
 
@@ -55,6 +56,7 @@ def default_artifacts() -> dict[str, str]:
         "log": "run.log",
         "model": MODEL_MANIFEST,
         "events": EVENTS_FILE,
+        "commands": COMMANDS_FILE,
         "snapshots": "snapshots",
         "checkpoint": CHECKPOINT_FILE,
     }

@@ -24,6 +24,35 @@
 
 <section id="final-metrics" class="stats-grid detail-stats" aria-label="Итоговые метрики"></section>
 
+<section class="panel control-panel" aria-labelledby="control-heading">
+  <div class="panel-heading">
+    <div>
+      <h2 id="control-heading">Управление запуском</h2>
+      <p>Команды применяются worker-процессом только между атомарными операциями.</p>
+    </div>
+    <span class="mono-label">commands.jsonl</span>
+  </div>
+  <div class="control-body">
+    <div id="control-message" class="notice notice-info">Читаем состояние управления…</div>
+    <div class="control-row">
+      <div class="control-actions" aria-label="Команды запуска">
+        <button class="button" type="button" data-run-command="pause">Пауза</button>
+        <button class="button" type="button" data-run-command="resume">Продолжить</button>
+        <button class="button button-primary" type="button" data-run-command="step">Один шаг</button>
+        <button class="button button-danger" type="button" data-run-command="cancel">Отменить</button>
+      </div>
+      <form id="delay-form" class="delay-control">
+        <label for="delay-ms">Задержка между операциями, мс</label>
+        <div>
+          <input id="delay-ms" type="number" min="0" max="60000" step="25" value="0">
+          <button class="button" type="submit" data-run-command="set_delay">Применить</button>
+        </div>
+      </form>
+    </div>
+    <div id="control-error" class="notice notice-error hidden" role="alert"></div>
+  </div>
+</section>
+
 <section class="detail-grid">
   <article class="panel">
     <div class="panel-heading"><h2>Параметры</h2><span class="mono-label">config.json</span></div>

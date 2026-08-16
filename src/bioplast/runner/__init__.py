@@ -6,6 +6,7 @@
 
 from bioplast.runner.run import (
     RunContext,
+    cancel_prepared_run,
     config_slug,
     fail_prepared_run,
     git_provenance,
@@ -17,6 +18,7 @@ from bioplast.runner.run import (
 )
 from bioplast.runner.contracts import (
     CHECKPOINT_FILE,
+    COMMANDS_FILE,
     CONTRACT_VERSION,
     ConnectionSpec,
     ContractError,
@@ -34,6 +36,14 @@ from bioplast.runner.contracts import (
     write_model_manifest,
     write_run_manifest,
 )
+from bioplast.runner.control import (
+    CooperativeRunControl,
+    RunCancelled,
+    RunCommand,
+    RunCommandType,
+    append_run_command,
+    read_run_commands,
+)
 from bioplast.runner.checkpoints import (
     CHECKPOINT_VERSION,
     load_training_checkpoint,
@@ -46,15 +56,20 @@ from bioplast.runner.queue import RunScheduler, run_queue
 __all__ = [
     "CONTRACT_VERSION",
     "CHECKPOINT_FILE",
+    "COMMANDS_FILE",
     "CHECKPOINT_VERSION",
     "ConnectionSpec",
     "ContractError",
+    "CooperativeRunControl",
     "ExperimentResult",
     "InspectionError",
     "LayerSpec",
     "ModelManifest",
     "ModelArtifacts",
     "RunEvent",
+    "RunCancelled",
+    "RunCommand",
+    "RunCommandType",
     "RunContext",
     "RunManifest",
     "RunScheduler",
@@ -62,6 +77,8 @@ __all__ = [
     "TensorSpec",
     "TensorSummary",
     "append_event",
+    "append_run_command",
+    "cancel_prepared_run",
     "config_slug",
     "fail_prepared_run",
     "git_provenance",
@@ -73,6 +90,7 @@ __all__ = [
     "load_training_checkpoint",
     "make_run_id",
     "prepare_run",
+    "read_run_commands",
     "run_config",
     "run_prepared",
     "run_queue",

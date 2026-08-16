@@ -181,6 +181,17 @@ textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; 
 .tensor-heatmap-row { justify-content: start; padding: 0 9px; }
 .tensor-heatmap-cell { min-height: 36px; display: grid; place-items: center; color: #f4fbff; border-right: 1px solid rgba(7,16,25,.5); border-bottom: 1px solid rgba(7,16,25,.5); overflow: hidden; text-indent: -9999px; cursor: help; }
 
+.control-panel { margin-bottom: 20px; }
+.control-body { padding: 20px; }
+.control-body > .notice { margin-bottom: 18px; }
+.control-row { display: flex; align-items: end; justify-content: space-between; gap: 20px; }
+.control-actions { display: flex; flex-wrap: wrap; gap: 9px; }
+.button-danger { color: #ffd0d4; border-color: #713641; background: #30151b; }
+.button-danger:hover:not(:disabled) { border-color: var(--red); background: #411b24; }
+.delay-control { min-width: min(100%, 330px); display: grid; gap: 7px; }
+.delay-control label { color: var(--muted); font-size: 11px; }
+.delay-control > div { display: grid; grid-template-columns: minmax(110px, 1fr) auto; gap: 8px; }
+
 .charts-panel { margin-top: 20px; }
 .charts-grid { padding: 18px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .chart-shell { min-width: 0; }
@@ -261,6 +272,7 @@ textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; 
   .detail-grid { grid-template-columns: 1fr 1fr; }
   .detail-grid .panel:last-child { grid-column: 1 / -1; }
   .rerun-fields { grid-template-columns: 1fr 1fr; }
+  .control-row { align-items: stretch; flex-direction: column; }
   .compare-picker { grid-template-columns: 1fr 1fr; }
   .compare-actions { grid-column: 1 / -1; flex-direction: row; justify-content: flex-end; }
   .tensor-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -289,6 +301,8 @@ textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; 
   .rerun-diff-row { grid-template-columns: 1fr; gap: 5px; }
   .rerun-arrow { display: none; }
   .rerun-actions .button { flex: 1; }
+  .control-actions .button { flex: 1 1 130px; }
+  .delay-control { min-width: 100%; }
   .compare-picker { grid-template-columns: 1fr; }
   .compare-actions { grid-column: auto; }
   .compare-actions .button { flex: 1; }

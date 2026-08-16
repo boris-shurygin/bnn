@@ -86,6 +86,7 @@ def run(config: dict[str, Any], ctx) -> ExperimentResult:
 
     generator = torch.Generator(device=device).manual_seed(ctx.seed)
     test_acc = 0.0
+    train_step = 0
 
     for epoch in range(1, epochs + 1):
         model.train()
@@ -93,6 +94,7 @@ def run(config: dict[str, Any], ctx) -> ExperimentResult:
         acts: dict[str, torch.Tensor] = {}
 
         for xb, yb in data.batches(batch_size, shuffle=True, generator=generator):
+            ctx.control.checkpoint(step=train_step, phase="train_batch")
             logits, acts = model(xb, collect=True)
             loss = loss_fn(logits, yb)
 
@@ -103,6 +105,7 @@ def run(config: dict[str, Any], ctx) -> ExperimentResult:
             total_loss += loss.item() * xb.shape[0]
             correct += (logits.argmax(dim=1) == yb).sum().item()
             seen += xb.shape[0]
+            train_step += 1
 
         model.eval()
         test_acc = evaluate(model, data.test_x, data.test_y)

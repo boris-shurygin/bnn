@@ -12,6 +12,7 @@ let detailSignature = "";
 let logOffset = 0;
 let logLoading = false;
 let logMissing = false;
+let controlLoading = false;
 let rerunPreview = null;
 const rerunInputs = new Map();
 let modelSignature = "";
@@ -605,6 +606,63 @@ async function fetchDetail() {
   }
 }
 
+function renderControl(control) {
+  const available = new Set(control.available_commands || []);
+  document.querySelectorAll("[data-run-command]").forEach(button => {
+    button.disabled = !available.has(button.dataset.runCommand);
+  });
+  const delay = document.querySelector("#delay-ms");
+  if (document.activeElement !== delay) delay.value = String(control.delay_ms ?? 0);
+  const actual = statusNames[control.status] || control.status;
+  const requested = statusNames[control.requested_status] || control.requested_status;
+  const pending = control.status === control.requested_status
+    ? "" : ` · запрошено: ${requested}`;
+  showNotice("#control-message",
+    `Состояние: ${actual}${pending} · задержка ${control.delay_ms ?? 0} мс · команда #${control.last_command_seq}`);
+}
+
+async function loadControl() {
+  if (controlLoading) return;
+  controlLoading = true;
+  try {
+    const response = await fetch(`/api/runs/${encodedRunId}/control`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || `API ответил ${response.status}`);
+    renderControl(payload);
+    showNotice("#control-error", "");
+  } catch (error) {
+    showNotice("#control-error", `Не удалось прочитать управление: ${error.message}`);
+  } finally {
+    controlLoading = false;
+  }
+}
+
+async function issueControl(command, delayMs = null) {
+  if (controlLoading) return;
+  controlLoading = true;
+  document.querySelectorAll("[data-run-command]").forEach(button => { button.disabled = true; });
+  const body = { command };
+  if (delayMs !== null) body.delay_ms = delayMs;
+  try {
+    const response = await fetch(`/api/runs/${encodedRunId}/control`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || `API ответил ${response.status}`);
+    renderControl(payload.control);
+    showNotice("#control-error", "");
+    fetchDetail();
+  } catch (error) {
+    showNotice("#control-error", error.message);
+    controlLoading = false;
+    await loadControl();
+    return;
+  }
+  controlLoading = false;
+}
+
 async function pollLog(reset = false) {
   if (logLoading) return;
   logLoading = true;
@@ -755,6 +813,25 @@ async function loadRerunPreview() {
 document.querySelector("#rerun-reset").addEventListener("click", () => {
   if (rerunPreview) renderRerunForm(rerunPreview);
 });
+document.querySelectorAll("[data-run-command]:not([data-run-command='set_delay'])").forEach(button => {
+  button.addEventListener("click", () => {
+    const command = button.dataset.runCommand;
+    if (command === "cancel"
+      && !window.confirm("Отменить этот запуск в следующей безопасной точке?")) {
+      return;
+    }
+    issueControl(command);
+  });
+});
+document.querySelector("#delay-form").addEventListener("submit", event => {
+  event.preventDefault();
+  const delayMs = Number(document.querySelector("#delay-ms").value);
+  if (!Number.isInteger(delayMs) || delayMs < 0 || delayMs > 60000) {
+    showNotice("#control-error", "Задержка должна быть целым числом от 0 до 60000 мс.");
+    return;
+  }
+  issueControl("set_delay", delayMs);
+});
 document.querySelector("#rerun-form").addEventListener("submit", async event => {
   event.preventDefault();
   const submit = document.querySelector("#rerun-submit");
@@ -793,6 +870,10 @@ setInterval(() => {
 setInterval(() => {
   if (!detail || !terminalStatuses.has(detail.manifest.status)) fetchDetail();
 }, 5000);
+setInterval(() => {
+  if (!detail || !terminalStatuses.has(detail.manifest.status)) loadControl();
+}, 1000);
 fetchDetail();
+loadControl();
 pollLog(true);
 loadRerunPreview();
