@@ -99,6 +99,7 @@ def test_model_inspector_exports_xor_execution_graph_and_restores_mode():
     assert all(tensor.value_mode == "full" for tensor in manifest.layers[0].tensors)
     assert manifest.capture_phase == "completed"
     assert manifest.step == 2000
+    assert manifest.capture_batch_size == 4
 
 
 def test_xor_run_writes_loadable_model_manifest(tmp_path):
@@ -123,6 +124,7 @@ def test_xor_run_writes_loadable_model_manifest(tmp_path):
     assert manifest.model_name == "mlp-2-3-1"
     assert [layer.layer_id for layer in manifest.layers] == ["hidden", "output"]
     assert manifest.layers[0].tensors[0].shape == (3, 2)
+    assert manifest.capture_batch_size == 4
     assert checkpoint["step"] == 1
     assert set(checkpoint["model_state_dict"]) == {
         "layers.0.weight",

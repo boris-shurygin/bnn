@@ -116,6 +116,71 @@ textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; 
 .kv-key { color: var(--muted); overflow-wrap: anywhere; }
 .kv-value { color: var(--text); text-align: right; overflow-wrap: anywhere; white-space: pre-wrap; }
 
+.model-state .empty { margin: 0; }
+.model-notice { margin: 20px; }
+.model-inspector { padding: 20px; }
+.model-overview { border: 1px solid #213748; border-radius: 12px; background: rgba(7,16,25,.54); overflow: hidden; }
+.model-facts { display: flex; margin: 0; border-bottom: 1px solid #213748; }
+.model-facts .layer-fact { flex: 1 1 180px; }
+.model-graph { min-height: 190px; display: flex; align-items: center; overflow-x: auto; padding: 24px; }
+.model-node { flex: 0 0 210px; min-height: 126px; display: flex; flex-direction: column; align-items: flex-start; gap: 7px; color: var(--text); text-align: left; border: 1px solid #315064; border-radius: 12px; background: linear-gradient(145deg, #14293a, #0b1a26); padding: 15px 16px; cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
+.model-node:hover { border-color: #4d788d; transform: translateY(-1px); }
+.model-node:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+.model-node-selected { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(80,214,208,.1), 0 12px 30px rgba(0,0,0,.2); }
+.model-node-id { color: var(--cyan); font: 700 12px/1.35 "Cascadia Code", Consolas, monospace; overflow-wrap: anywhere; }
+.model-node-type { font-size: 17px; }
+.model-node-shape, .model-node-params { color: var(--muted); font-size: 11px; }
+.model-edge { flex: 0 0 74px; display: grid; place-items: center; gap: 1px; color: var(--cyan); }
+.model-edge-arrow { font: 28px/1 Georgia, serif; }
+.model-edge small { color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .1em; }
+.model-edge-learning { color: var(--amber); }
+.model-edge-order { color: #536b7a; }
+.model-connections { min-height: 45px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border-top: 1px solid #213748; padding: 10px 14px; }
+.model-connection, .model-connection-empty { border: 1px solid #294256; border-radius: 999px; color: var(--muted); background: #0b1a26; padding: 4px 9px; font: 10px/1.4 "Cascadia Code", Consolas, monospace; }
+.model-connection-learning { color: var(--amber); border-color: #765b2e; }
+.layer-inspector { margin-top: 18px; border: 1px solid #294256; border-radius: 12px; background: rgba(9,20,30,.72); overflow: hidden; }
+.layer-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 20px; border-bottom: 1px solid #213748; }
+.layer-heading h3 { margin: 4px 0 0; font: 700 20px/1.2 "Cascadia Code", Consolas, monospace; }
+.layer-badges, .tensor-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.layer-badge, .tensor-badge { color: #bdd0db; border: 1px solid #315064; border-radius: 999px; background: #112534; padding: 5px 9px; font: 10px/1.3 "Cascadia Code", Consolas, monospace; }
+.layer-badge-accent, .tensor-mode-full { color: var(--cyan); border-color: #338781; background: rgba(23,61,66,.7); }
+.tensor-mode-summary { color: var(--amber); border-color: #765b2e; background: rgba(48,36,17,.75); }
+.layer-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; border-bottom: 1px solid #213748; }
+.layer-fact { min-width: 0; padding: 14px 18px; border-right: 1px solid #213748; }
+.layer-fact:last-child { border-right: 0; }
+.layer-fact dt { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; }
+.layer-fact dd { margin: 6px 0 0; color: var(--text); font: 600 13px/1.4 "Cascadia Code", Consolas, monospace; overflow-wrap: anywhere; }
+.tensor-tabs { display: flex; gap: 7px; overflow-x: auto; padding: 14px 18px 0; }
+.tensor-tab { color: var(--muted); border: 1px solid #294256; border-radius: 8px 8px 0 0; background: #0b1924; padding: 8px 13px; cursor: pointer; font: 11px/1.35 "Cascadia Code", Consolas, monospace; }
+.tensor-tab:hover { color: var(--text); }
+.tensor-tab-selected { color: var(--text); border-color: #338781; border-bottom-color: #10222f; background: #10222f; }
+.tensor-body { margin: 0 18px 18px; border: 1px solid #294256; border-radius: 0 10px 10px 10px; background: #0a151f; overflow: hidden; }
+.tensor-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 16px 18px; border-bottom: 1px solid #213748; }
+.tensor-heading h4 { margin: 4px 0 0; font: 700 16px/1.25 "Cascadia Code", Consolas, monospace; }
+.tensor-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 0; border-bottom: 1px solid #213748; }
+.tensor-summary-item { min-width: 0; padding: 12px 14px; border-right: 1px solid #1d3241; border-bottom: 1px solid #1d3241; }
+.tensor-summary-item:nth-child(5n) { border-right: 0; }
+.tensor-summary-item:nth-last-child(-n + 5) { border-bottom: 0; }
+.tensor-summary-item dt { color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
+.tensor-summary-item dd { margin: 5px 0 0; font: 600 12px/1.4 "Cascadia Code", Consolas, monospace; overflow-wrap: anywhere; }
+.model-inline-empty { color: var(--muted); margin: 0; padding: 20px 18px; text-align: center; font-size: 12px; }
+.tensor-view-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 18px 9px; }
+.tensor-view-heading h4 { margin: 0; font-size: 13px; }
+.tensor-view-heading span { color: var(--muted); font-size: 10px; }
+.tensor-values-scroll, .tensor-heatmap-scroll { overflow: auto; margin: 0 18px 16px; border: 1px solid #213748; border-radius: 9px; }
+.tensor-values-table { min-width: 100%; border-collapse: collapse; font: 10px/1.35 "Cascadia Code", Consolas, monospace; font-variant-numeric: tabular-nums; }
+.tensor-values-table th, .tensor-values-table td { min-width: 82px; border-right: 1px solid #1d3241; border-bottom: 1px solid #1d3241; padding: 8px 10px; text-align: right; white-space: nowrap; }
+.tensor-values-table thead th { position: sticky; top: 0; z-index: 1; color: var(--muted); background: #0e1d29; }
+.tensor-values-table tr:last-child th, .tensor-values-table tr:last-child td { border-bottom: 0; }
+.tensor-values-table th:last-child, .tensor-values-table td:last-child { border-right: 0; }
+.tensor-values-table .tensor-index { min-width: 68px; position: sticky; left: 0; z-index: 2; color: var(--muted); background: #0e1d29; text-align: left; }
+.tensor-heatmap-section { border-top: 1px solid #213748; padding-bottom: 2px; }
+.tensor-heatmap-scale { font-family: "Cascadia Code", Consolas, monospace; }
+.tensor-heatmap { display: grid; grid-template-columns: minmax(68px, auto) repeat(var(--tensor-columns), minmax(34px, 1fr)); align-items: stretch; background: #071019; font: 9px/1 "Cascadia Code", Consolas, monospace; font-variant-numeric: tabular-nums; }
+.tensor-heatmap-axis, .tensor-heatmap-corner { min-height: 26px; display: grid; place-items: center; color: var(--muted); background: #0e1d29; border-right: 1px solid #1d3241; border-bottom: 1px solid #1d3241; }
+.tensor-heatmap-row { justify-content: start; padding: 0 9px; }
+.tensor-heatmap-cell { min-height: 36px; display: grid; place-items: center; color: #f4fbff; border-right: 1px solid rgba(7,16,25,.5); border-bottom: 1px solid rgba(7,16,25,.5); overflow: hidden; text-indent: -9999px; cursor: help; }
+
 .charts-panel { margin-top: 20px; }
 .charts-grid { padding: 18px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .chart-shell { min-width: 0; }
@@ -198,6 +263,11 @@ textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; 
   .rerun-fields { grid-template-columns: 1fr 1fr; }
   .compare-picker { grid-template-columns: 1fr 1fr; }
   .compare-actions { grid-column: 1 / -1; flex-direction: row; justify-content: flex-end; }
+  .tensor-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .tensor-summary-item:nth-child(5n) { border-right: 1px solid #1d3241; }
+  .tensor-summary-item:nth-child(3n) { border-right: 0; }
+  .tensor-summary-item:nth-last-child(-n + 5) { border-bottom: 1px solid #1d3241; }
+  .tensor-summary-item:nth-last-child(-n + 2) { border-bottom: 0; }
 }
 @media (max-width: 760px) {
   .shell { width: min(100% - 24px, 1440px); padding-top: 28px; }
@@ -222,4 +292,19 @@ textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; 
   .compare-picker { grid-template-columns: 1fr; }
   .compare-actions { grid-column: auto; }
   .compare-actions .button { flex: 1; }
+  .model-inspector { padding: 12px; }
+  .model-graph { padding: 18px 14px; }
+  .model-node { flex-basis: 184px; }
+  .model-edge { flex-basis: 54px; }
+  .layer-heading, .tensor-heading { align-items: flex-start; flex-direction: column; }
+  .layer-badges, .tensor-badges { justify-content: flex-start; }
+  .model-facts { flex-wrap: wrap; }
+  .model-facts .layer-fact { flex-basis: 50%; }
+  .layer-facts { grid-template-columns: 1fr 1fr; }
+  .layer-fact:nth-child(2) { border-right: 0; }
+  .layer-fact:nth-child(-n + 2) { border-bottom: 1px solid #213748; }
+  .tensor-summary { grid-template-columns: 1fr 1fr; }
+  .tensor-summary-item:nth-child(3n) { border-right: 1px solid #1d3241; }
+  .tensor-summary-item:nth-child(2n) { border-right: 0; }
+  .tensor-summary-item:nth-last-child(-n + 2) { border-bottom: 0; }
 }

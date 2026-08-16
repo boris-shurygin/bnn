@@ -207,6 +207,12 @@ def inspect_model(
         ConnectionSpec(source=source.layer_id, target=target.layer_id)
         for source, target in zip(layers, layers[1:])
     )
+    example_tensor = _first_tensor(example_args)
+    capture_batch_size = (
+        int(example_tensor.shape[0])
+        if example_tensor is not None and example_tensor.ndim >= 2
+        else None
+    )
     return ModelManifest(
         run_id=run_id,
         model_name=model_name,
@@ -215,6 +221,7 @@ def inspect_model(
         captured_at=utc_offset_iso(),
         capture_phase=capture_phase,
         step=step,
+        capture_batch_size=capture_batch_size,
     )
 
 

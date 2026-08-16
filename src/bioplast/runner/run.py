@@ -2,10 +2,12 @@
 
 Контракт эксперимента: модуль в `experiments/` определяет функцию
 
-    def run(config: dict, ctx: RunContext) -> dict
+    def run(config: dict, ctx: RunContext) -> ExperimentResult
 
-Возвращённый словарь попадает в `metrics.json` как `final`. Всё, что нужно
-записать по эпохам, эксперимент кладёт в `ctx.metrics`.
+`ExperimentResult.final` попадает в `metrics.json`, а опциональный
+`model_artifacts` централизованно превращается в одинаковые `model.json` и
+`checkpoint.pt`. Всё, что нужно записать по эпохам, эксперимент кладёт в
+`ctx.metrics`.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from bioplast.runner.contracts import (
     utc_offset_iso,
     write_run_manifest,
 )
+from bioplast.runner.experiment import ExperimentResult, finalize_experiment
 
 LOGGER_NAME = "bioplast.run"
 # Метка времени первой компонентой имени: лексикографическая сортировка папок
@@ -314,8 +317,10 @@ def load_experiment(name: str):
         sys.path.insert(0, str(root))
     module_name = name if "." in name else f"experiments.{name}"
     module = importlib.import_module(module_name)
-    if not hasattr(module, "run"):
-        raise AttributeError(f"{module_name} не определяет функцию run(config, ctx)")
+    if not callable(getattr(module, "run", None)):
+        raise AttributeError(
+            f"{module_name} не определяет функцию run(config, ctx) -> ExperimentResult"
+        )
     return module
 
 
@@ -488,7 +493,14 @@ def run_prepared(run_dir: Path | str) -> Path:
     status, final, error = "ok", {}, None
     try:
         module = load_experiment(str(config["experiment"]))
-        final = module.run(config, ctx) or {}
+        result = module.run(config, ctx)
+        final = finalize_experiment(
+            result,
+            config=config,
+            run_id=run_id,
+            run_dir=run_dir,
+            logger=logger,
+        )
     except Exception:
         status = "failed"
         error = traceback.format_exc()

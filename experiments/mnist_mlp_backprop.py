@@ -15,6 +15,7 @@ from torch import nn
 
 from bioplast.data import load_mnist
 from bioplast.diagnostics.probes import log_module_state
+from bioplast.runner import ExperimentResult, ModelArtifacts
 
 # Дублирование MLP с xor_backprop.py — намеренное: правило трёх, второй раз
 # ещё не повод заводить общий модуль.
@@ -49,7 +50,7 @@ def evaluate(model: nn.Module, x: torch.Tensor, y: torch.Tensor, batch: int = 20
     return correct / x.shape[0]
 
 
-def run(config: dict[str, Any], ctx) -> dict[str, Any]:
+def run(config: dict[str, Any], ctx) -> ExperimentResult:
     hidden = list(config.get("hidden", [256]))
     epochs = int(config.get("epochs", 10))
     batch_size = int(config.get("batch_size", 128))
@@ -121,9 +122,34 @@ def run(config: dict[str, Any], ctx) -> dict[str, Any]:
             "эпоха %2d: loss=%.4f, train=%.4f, test=%.4f", epoch, train_loss, correct / seen, test_acc
         )
 
-    return {
-        "test_acc": test_acc,
-        "train_acc": correct / seen,
-        "train_loss": train_loss,
-        "params": sum(p.numel() for p in model.parameters()),
+    last_layer = len(model.layers) - 1
+    single_hidden = last_layer == 1
+    layer_ids = {}
+    for index in range(len(model.layers)):
+        if index == last_layer:
+            layer_id = "output"
+        elif single_hidden:
+            layer_id = "hidden"
+        else:
+            layer_id = f"hidden_{index + 1}"
+        layer_ids[f"layers.{index}"] = layer_id
+    activations = {
+        f"layers.{index}": "identity" if index == last_layer else "relu"
+        for index in range(len(model.layers))
     }
+    return ExperimentResult(
+        final={
+            "test_acc": test_acc,
+            "train_acc": correct / seen,
+            "train_loss": train_loss,
+            "params": sum(p.numel() for p in model.parameters()),
+        },
+        model_artifacts=ModelArtifacts(
+            model=model,
+            optimizer=optimizer,
+            example_args=(data.train_x[:batch_size],),
+            layer_ids=layer_ids,
+            activations=activations,
+            step=epochs,
+        ),
+    )

@@ -357,6 +357,7 @@ class ModelManifest:
     captured_at: str | None = None
     capture_phase: str | None = None
     step: int | None = None
+    capture_batch_size: int | None = None
     schema_version: int = CONTRACT_VERSION
     kind: str = "model"
 
@@ -368,6 +369,8 @@ class ModelManifest:
             raise ContractError("модель должна содержать хотя бы один слой")
         if self.step is not None and self.step < 0:
             raise ContractError("step снимка модели не может быть отрицательным")
+        if self.capture_batch_size is not None and self.capture_batch_size < 1:
+            raise ContractError("capture_batch_size должен быть положительным")
         layer_ids = [layer.layer_id for layer in self.layers]
         if len(layer_ids) != len(set(layer_ids)):
             raise ContractError("идентификаторы слоёв должны быть уникальными")
@@ -387,6 +390,7 @@ class ModelManifest:
             "captured_at": self.captured_at,
             "capture_phase": self.capture_phase,
             "step": self.step,
+            "capture_batch_size": self.capture_batch_size,
             "layers": [layer.to_dict() for layer in self.layers],
             "connections": [connection.to_dict() for connection in self.connections],
         }
@@ -400,6 +404,11 @@ class ModelManifest:
             captured_at=_optional_str(value.get("captured_at")),
             capture_phase=_optional_str(value.get("capture_phase")),
             step=int(value["step"]) if value.get("step") is not None else None,
+            capture_batch_size=(
+                int(value["capture_batch_size"])
+                if value.get("capture_batch_size") is not None
+                else None
+            ),
             layers=tuple(LayerSpec.from_dict(item) for item in value.get("layers", [])),
             connections=tuple(
                 ConnectionSpec.from_dict(item) for item in value.get("connections", [])

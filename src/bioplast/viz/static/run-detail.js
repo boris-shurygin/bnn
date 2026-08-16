@@ -14,6 +14,10 @@ let logLoading = false;
 let logMissing = false;
 let rerunPreview = null;
 const rerunInputs = new Map();
+let modelSignature = "";
+let modelLoadToken = 0;
+let selectedLayerId = null;
+const selectedTensorByLayer = new Map();
 
 function node(tag, className, text) {
   const value = document.createElement(tag);
@@ -208,6 +212,357 @@ function interactiveChartShell(chart) {
   return shell;
 }
 
+function formatShape(shape) {
+  if (!Array.isArray(shape)) return "—";
+  if (!shape.length) return "scalar";
+  return shape.map(value => value == null ? "?" : value).join(" × ");
+}
+
+function validateModelPayload(payload) {
+  if (!payload || payload.schema_version !== 1 || payload.kind !== "model") {
+    throw new Error("Поддерживается только model.json версии 1.");
+  }
+  if (payload.run_id !== runId) {
+    throw new Error(`model.json принадлежит другому запуску: ${payload.run_id || "—"}`);
+  }
+  if (!Array.isArray(payload.layers) || !payload.layers.length) {
+    throw new Error("model.json не содержит слоёв.");
+  }
+  if (payload.capture_batch_size != null &&
+      (!Number.isInteger(payload.capture_batch_size) || payload.capture_batch_size < 1)) {
+    throw new Error("capture_batch_size должен быть положительным целым числом.");
+  }
+  const layerIds = new Set();
+  for (const layer of payload.layers) {
+    if (!layer || typeof layer.id !== "string" || !layer.id || layerIds.has(layer.id)) {
+      throw new Error("model.json содержит пустой или повторяющийся id слоя.");
+    }
+    layerIds.add(layer.id);
+    if (!Array.isArray(layer.tensors)) throw new Error(`У слоя ${layer.id} нет списка tensors.`);
+  }
+  if (!Array.isArray(payload.connections)) throw new Error("В model.json нет списка connections.");
+  for (const connection of payload.connections) {
+    if (!layerIds.has(connection.source) || !layerIds.has(connection.target)) {
+      throw new Error(`Связь ${connection.source || "?"} → ${connection.target || "?"} ссылается на неизвестный слой.`);
+    }
+  }
+}
+
+function setModelState(message, kind = "empty") {
+  const state = document.querySelector("#model-state");
+  state.replaceChildren();
+  const content = node("p", kind === "error" ? "notice notice-error model-notice" : "empty", message);
+  state.append(content);
+  state.classList.remove("hidden");
+  document.querySelector("#model-inspector").classList.add("hidden");
+}
+
+function modelNode(layer) {
+  const weight = layer.tensors.find(tensor => tensor.role === "parameter" && tensor.name === "weight");
+  const button = node("button", "model-node");
+  button.type = "button";
+  button.dataset.layerId = layer.id;
+  button.setAttribute("aria-label", `Открыть слой ${layer.id}`);
+  button.append(
+    node("span", "model-node-id", layer.id),
+    node("strong", "model-node-type", layer.type || "unknown"),
+    node("span", "model-node-shape", weight ? `weight ${formatShape(weight.shape)}` : "weight не сохранён"),
+    node("span", "model-node-params", `${formatValue(layer.parameter_count || 0)} параметров`),
+  );
+  button.addEventListener("click", () => {
+    selectedLayerId = layer.id;
+    renderSelectedLayer(currentModel);
+  });
+  return button;
+}
+
+let currentModel = null;
+
+function renderModelFacts(model, config) {
+  const facts = document.querySelector("#model-facts");
+  facts.replaceChildren();
+  const configuredBatch = config?.batch_size ?? config?.batch;
+  if (configuredBatch != null) facts.append(fact("Батч обучения", formatValue(configuredBatch)));
+  facts.append(
+    fact("Батч снимка", model.capture_batch_size == null ? "не записан" : formatValue(model.capture_batch_size)),
+    fact("Слои", formatValue(model.layers.length)),
+    fact("Параметры", formatValue(model.layers.reduce((sum, layer) => sum + (layer.parameter_count || 0), 0))),
+  );
+}
+
+function renderModelGraph(model) {
+  const graph = document.querySelector("#model-graph");
+  graph.replaceChildren();
+  model.layers.forEach((layer, index) => {
+    if (index) {
+      const previous = model.layers[index - 1];
+      const connection = model.connections.find(item =>
+        item.source === previous.id && item.target === layer.id);
+      const edge = node("div", connection ? `model-edge model-edge-${connection.kind}` : "model-edge model-edge-order");
+      edge.append(
+        node("span", "model-edge-arrow", connection?.kind === "learning" ? "⇢" : connection ? "→" : "⋯"),
+        node("small", "", connection?.kind || "порядок"),
+      );
+      graph.append(edge);
+    }
+    graph.append(modelNode(layer));
+  });
+
+  const connections = document.querySelector("#model-connections");
+  connections.replaceChildren();
+  if (!model.connections.length) {
+    connections.append(node("span", "model-connection-empty", "Связи не сохранены"));
+    return;
+  }
+  for (const connection of model.connections) {
+    connections.append(node(
+      "span",
+      `model-connection model-connection-${connection.kind}`,
+      `${connection.source} → ${connection.target} · ${connection.kind}`,
+    ));
+  }
+}
+
+function fact(label, value) {
+  const item = node("div", "layer-fact");
+  item.append(node("dt", "", label), node("dd", "", value));
+  return item;
+}
+
+function summaryValue(key, value) {
+  if (value == null) return "—";
+  if (key === "sparsity") return `${formatValue(value * 100)} %`;
+  return formatValue(value);
+}
+
+function tensorRows(values, shape) {
+  if (!shape.length) return [{ label: "value", values: [values] }];
+  if (shape.length === 1) return [{ label: "value", values }];
+  const rows = [];
+  function visit(value, path, depth) {
+    if (depth === shape.length - 1) {
+      rows.push({ label: `[${path.join(", ")}]`, values: value });
+      return;
+    }
+    value.forEach((child, index) => visit(child, [...path, index], depth + 1));
+  }
+  visit(values, [], 0);
+  return rows;
+}
+
+function renderTensorTable(tensor, rows) {
+  const wrap = node("div", "tensor-values-scroll");
+  const table = node("table", "tensor-values-table");
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  headRow.append(node("th", "tensor-index", "индекс"));
+  const columnCount = Math.max(0, ...rows.map(row => row.values.length));
+  for (let index = 0; index < columnCount; index += 1) headRow.append(node("th", "", `[${index}]`));
+  head.append(headRow);
+  const body = document.createElement("tbody");
+  for (const row of rows) {
+    const tableRow = document.createElement("tr");
+    tableRow.append(node("th", "tensor-index", row.label));
+    row.values.forEach(value => tableRow.append(node("td", "", formatValue(value))));
+    body.append(tableRow);
+  }
+  table.append(head, body);
+  wrap.append(table);
+  wrap.setAttribute("aria-label", `Числовые значения тензора ${tensor.name}`);
+  return wrap;
+}
+
+function heatColor(value, maximum) {
+  if (!maximum || value === 0) return "#132635";
+  const strength = .14 + .78 * Math.min(1, Math.abs(value) / maximum);
+  return value < 0 ? `rgba(255, 117, 129, ${strength})` : `rgba(80, 214, 208, ${strength})`;
+}
+
+function renderTensorHeatmap(tensor, rows) {
+  const values = rows.flatMap(row => row.values).filter(value => typeof value === "number" && Number.isFinite(value));
+  const maximum = Math.max(0, ...values.map(Math.abs));
+  const columnCount = Math.max(0, ...rows.map(row => row.values.length));
+  const section = node("section", "tensor-heatmap-section");
+  const heading = node("div", "tensor-view-heading");
+  heading.append(node("h4", "", "Heatmap"));
+  const scale = node("span", "tensor-heatmap-scale", `−${formatValue(maximum)} · 0 · +${formatValue(maximum)}`);
+  heading.append(scale);
+  const scroll = node("div", "tensor-heatmap-scroll");
+  const grid = node("div", "tensor-heatmap");
+  grid.style.setProperty("--tensor-columns", String(columnCount));
+  grid.style.minWidth = `${Math.max(240, 70 + columnCount * 38)}px`;
+  grid.append(node("span", "tensor-heatmap-corner", ""));
+  for (let index = 0; index < columnCount; index += 1) grid.append(node("span", "tensor-heatmap-axis", String(index)));
+  rows.forEach((row, rowIndex) => {
+    grid.append(node("span", "tensor-heatmap-axis tensor-heatmap-row", row.label));
+    row.values.forEach((value, columnIndex) => {
+      const cell = node("span", "tensor-heatmap-cell", formatValue(value));
+      cell.style.background = heatColor(value, maximum);
+      cell.title = `${tensor.name}${row.label === "value" ? "" : row.label}[${columnIndex}] = ${formatValue(value)}`;
+      grid.append(cell);
+    });
+  });
+  scroll.append(grid);
+  section.append(heading, scroll);
+  return section;
+}
+
+const omittedReasons = {
+  size_limit: "Полные значения не включены: тензор превышает лимит инспектора.",
+  non_finite: "Полные значения не включены: тензор содержит NaN или Infinity.",
+  empty_tensor: "Тензор пуст.",
+  unsupported_json_dtype: "Полные значения не включены для этого dtype.",
+};
+
+function renderTensor(layer, tensor, container) {
+  container.replaceChildren();
+  const heading = node("div", "tensor-heading");
+  const title = node("div", "");
+  title.append(node("p", "eyebrow", tensor.role || "tensor"), node("h4", "", tensor.name));
+  const badges = node("div", "tensor-badges");
+  badges.append(
+    node("span", "tensor-badge", tensor.dtype || "unknown"),
+    node("span", "tensor-badge", formatShape(tensor.shape)),
+    node("span", `tensor-badge tensor-mode-${tensor.value_mode}`, tensor.value_mode),
+  );
+  heading.append(title, badges);
+  container.append(heading);
+
+  const summary = tensor.summary;
+  if (summary) {
+    const labels = {
+      element_count: "элементов", finite_count: "конечных", non_finite_count: "NaN / Inf",
+      min: "min", max: "max", mean: "mean", std: "std",
+      l1_norm: "L1", l2_norm: "L2", sparsity: "sparsity",
+    };
+    const summaryGrid = node("dl", "tensor-summary");
+    for (const [key, label] of Object.entries(labels)) {
+      const item = node("div", "tensor-summary-item");
+      item.append(node("dt", "", label), node("dd", "", summaryValue(key, summary[key])));
+      summaryGrid.append(item);
+    }
+    container.append(summaryGrid);
+  } else {
+    container.append(node("p", "model-inline-empty", "Для тензора сохранены только метаданные."));
+  }
+
+  if (tensor.value_mode !== "full" || tensor.values == null) {
+    if (tensor.values_omitted_reason) {
+      container.append(node("p", "model-inline-empty", omittedReasons[tensor.values_omitted_reason] || `Значения не включены: ${tensor.values_omitted_reason}.`));
+    }
+    return;
+  }
+
+  const rows = tensorRows(tensor.values, tensor.shape || []);
+  const valuesHeading = node("div", "tensor-view-heading");
+  valuesHeading.append(node("h4", "", "Числа"), node("span", "", `${formatValue(summary?.element_count || 0)} значений`));
+  container.append(valuesHeading, renderTensorTable(tensor, rows), renderTensorHeatmap(tensor, rows));
+}
+
+function renderSelectedLayer(model) {
+  const layer = model.layers.find(item => item.id === selectedLayerId) || model.layers[0];
+  selectedLayerId = layer.id;
+  document.querySelectorAll(".model-node").forEach(item => {
+    const selected = item.dataset.layerId === layer.id;
+    item.classList.toggle("model-node-selected", selected);
+    item.setAttribute("aria-pressed", String(selected));
+  });
+
+  const inspector = document.querySelector("#layer-inspector");
+  inspector.replaceChildren();
+  const header = node("div", "layer-heading");
+  const title = node("div", "");
+  title.append(node("p", "eyebrow", "Выбранный слой"), node("h3", "", layer.id));
+  const badges = node("div", "layer-badges");
+  badges.append(node("span", "layer-badge", layer.type || "unknown"));
+  if (layer.activation) badges.append(node("span", "layer-badge layer-badge-accent", layer.activation));
+  header.append(title, badges);
+  const facts = node("dl", "layer-facts");
+  const weight = layer.tensors.find(tensor => tensor.role === "parameter" && tensor.name === "weight");
+  const bias = layer.tensors.find(tensor => tensor.role === "parameter" && tensor.name === "bias");
+  facts.append(
+    fact("Матрица weight", weight ? formatShape(weight.shape) : "—"),
+    fact("Вектор bias", bias ? formatShape(bias.shape) : "—"),
+    fact("Активация", layer.activation || "—"),
+    fact("Параметры", formatValue(layer.parameter_count || 0)),
+  );
+  inspector.append(header, facts);
+
+  if (!layer.tensors.length) {
+    inspector.append(node("p", "model-inline-empty", "У слоя нет сохранённых тензоров."));
+    return;
+  }
+  let tensorName = selectedTensorByLayer.get(layer.id);
+  if (!layer.tensors.some(item => item.name === tensorName)) tensorName = layer.tensors[0].name;
+  selectedTensorByLayer.set(layer.id, tensorName);
+  const tabs = node("div", "tensor-tabs");
+  const tensorBody = node("div", "tensor-body");
+  for (const tensor of layer.tensors) {
+    const tab = node("button", tensor.name === tensorName ? "tensor-tab tensor-tab-selected" : "tensor-tab", tensor.name);
+    tab.type = "button";
+    tab.addEventListener("click", () => {
+      selectedTensorByLayer.set(layer.id, tensor.name);
+      renderSelectedLayer(model);
+    });
+    tabs.append(tab);
+  }
+  inspector.append(tabs, tensorBody);
+  renderTensor(layer, layer.tensors.find(item => item.name === tensorName), tensorBody);
+}
+
+function renderModel(model, config) {
+  currentModel = model;
+  if (!model.layers.some(layer => layer.id === selectedLayerId)) selectedLayerId = model.layers[0].id;
+  const capture = [
+    model.model_name,
+    `${model.layers.length} слоёв`,
+    model.capture_phase ? `фаза ${model.capture_phase}` : null,
+    model.step == null ? null : `шаг ${formatValue(model.step)}`,
+    model.captured_at ? formatDate(model.captured_at) : null,
+  ].filter(Boolean);
+  document.querySelector("#model-caption").textContent = capture.join(" · ");
+  document.querySelector("#model-state").classList.add("hidden");
+  document.querySelector("#model-inspector").classList.remove("hidden");
+  renderModelFacts(model, config);
+  renderModelGraph(model);
+  renderSelectedLayer(model);
+}
+
+async function loadModel(payload) {
+  const modelPath = payload.manifest.artifacts?.model || "model.json";
+  const artifact = (payload.artifacts || []).find(item => item.path === modelPath);
+  if (!artifact) {
+    modelSignature = "";
+    modelLoadToken += 1;
+    currentModel = null;
+    selectedLayerId = null;
+    document.querySelector("#model-caption").textContent = "Инспекционный снимок не найден";
+    const active = !terminalStatuses.has(payload.manifest.status);
+    setModelState(active
+      ? "model.json ещё не создан. Снимок появится после безопасной точки экспорта."
+      : "Для этого запуска model.json не сохранён. Это нормальное состояние для старых прогонов.");
+    return;
+  }
+  const signature = `${modelPath}:${artifact.size_bytes}:${artifact.modified_at}`;
+  if (signature === modelSignature) return;
+  modelSignature = signature;
+  const token = ++modelLoadToken;
+  document.querySelector("#model-caption").textContent = "Читаем инспекционный снимок…";
+  setModelState("Загрузка model.json…");
+  const encodedPath = modelPath.split("/").map(encodeURIComponent).join("/");
+  try {
+    const response = await fetch(`/api/runs/${encodedRunId}/artifacts/${encodedPath}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`API ответил ${response.status}`);
+    const model = await response.json();
+    validateModelPayload(model);
+    if (token === modelLoadToken) renderModel(model, payload.config);
+  } catch (error) {
+    if (token !== modelLoadToken) return;
+    document.querySelector("#model-caption").textContent = "model.json не удалось прочитать";
+    setModelState(`Некорректный инспекционный снимок: ${error.message}`, "error");
+  }
+}
+
 function renderArtifacts(items) {
   const container = document.querySelector("#artifact-list");
   container.replaceChildren();
@@ -233,6 +588,7 @@ function renderDetail(payload) {
   renderKeyValues("#git-table", payload.metrics.git || {});
   renderCharts(payload.metrics);
   renderArtifacts(payload.artifacts || []);
+  loadModel(payload);
   const logPath = payload.manifest.artifacts.log || "run.log";
   const encodedLogPath = logPath.split("/").map(encodeURIComponent).join("/");
   document.querySelector("#download-log").href = `/api/runs/${encodedRunId}/artifacts/${encodedLogPath}`;

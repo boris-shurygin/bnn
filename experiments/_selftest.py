@@ -8,8 +8,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from bioplast.runner import ExperimentResult
 
-def run(config: dict[str, Any], ctx) -> dict[str, Any]:
+
+def run(config: dict[str, Any], ctx) -> ExperimentResult:
     if config.get("fail"):
         raise RuntimeError("падение по требованию конфига")
 
@@ -22,4 +24,4 @@ def run(config: dict[str, Any], ctx) -> dict[str, Any]:
     for step in range(steps):
         ctx.metrics.update(step, {"loss/train": 1.0 / (step + 1), "w_norm/fc1": 1.0 + step})
 
-    return {"steps": steps, "device": ctx.device}
+    return ExperimentResult(final={"steps": steps, "device": ctx.device})

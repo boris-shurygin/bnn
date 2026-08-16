@@ -39,6 +39,27 @@
   </article>
 </section>
 
+<section class="panel model-panel" aria-labelledby="model-heading">
+  <div class="panel-heading">
+    <div>
+      <h2 id="model-heading">Модель</h2>
+      <p id="model-caption">Ищем инспекционный снимок модели…</p>
+    </div>
+    <span class="mono-label">model.json</span>
+  </div>
+  <div id="model-state" class="model-state">
+    <p class="empty">Загрузка модели…</p>
+  </div>
+  <div id="model-inspector" class="model-inspector hidden">
+    <div class="model-overview">
+      <dl id="model-facts" class="model-facts"></dl>
+      <div id="model-graph" class="model-graph" aria-label="Граф слоёв модели"></div>
+      <div id="model-connections" class="model-connections"></div>
+    </div>
+    <article id="layer-inspector" class="layer-inspector" aria-live="polite"></article>
+  </div>
+</section>
+
 <section class="panel rerun-panel">
   <div class="panel-heading">
     <div>

@@ -82,6 +82,31 @@ def test_detail_page_contains_rerun_form_and_live_diff(tmp_path):
     assert "renderRerunDiff" in script.text
 
 
+def test_detail_page_contains_model_graph_layer_and_tensor_views(tmp_path):
+    client, run_id = _client(tmp_path)
+
+    page = client.get(f"/runs/{run_id}")
+    script = client.get("/static/run-detail.js")
+    css = client.get("/static/app.css")
+
+    assert "Модель" in page.text
+    assert 'id="model-graph"' in page.text
+    assert 'id="layer-inspector"' in page.text
+    assert "validateModelPayload" in script.text
+    assert "renderSelectedLayer" in script.text
+    assert "renderTensorTable" in script.text
+    assert "renderTensorHeatmap" in script.text
+    assert "Батч снимка" in script.text
+    assert "Матрица weight" in script.text
+    assert "weight ${formatShape(weight.shape)}" in script.text
+    assert "/artifacts/${encodedPath}" in script.text
+    assert "Это нормальное состояние для старых прогонов" in script.text
+    assert "checkpoint.pt" not in script.text
+    assert ".model-node-selected" in css.text
+    assert ".tensor-values-table" in css.text
+    assert ".tensor-heatmap-cell" in css.text
+
+
 def test_comparison_page_uses_local_plotly_and_comparison_api(tmp_path):
     client, _ = _client(tmp_path)
 

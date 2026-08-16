@@ -40,6 +40,7 @@ from bioplast.runner.checkpoints import (
     write_training_checkpoint,
 )
 from bioplast.runner.inspection import InspectionError, inspect_model, inspect_tensor
+from bioplast.runner.experiment import ExperimentResult, ModelArtifacts
 from bioplast.runner.queue import RunScheduler, run_queue
 
 __all__ = [
@@ -48,9 +49,11 @@ __all__ = [
     "CHECKPOINT_VERSION",
     "ConnectionSpec",
     "ContractError",
+    "ExperimentResult",
     "InspectionError",
     "LayerSpec",
     "ModelManifest",
+    "ModelArtifacts",
     "RunEvent",
     "RunContext",
     "RunManifest",

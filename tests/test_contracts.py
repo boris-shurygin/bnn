@@ -116,11 +116,23 @@ def test_model_manifest_round_trip(tmp_path):
             LayerSpec("output", "Linear", (None, 8), (None, 1), parameter_count=9),
         ),
         connections=(ConnectionSpec("hidden", "output"),),
+        capture_batch_size=4,
     )
 
     write_model_manifest(run_dir, model)
 
     assert load_model_manifest(run_dir) == model
+
+
+def test_model_rejects_non_positive_capture_batch_size():
+    with pytest.raises(ContractError, match="capture_batch_size"):
+        ModelManifest(
+            run_id="run",
+            model_name="bad",
+            layers=(LayerSpec("a", "Linear", (None, 1), (None, 1)),),
+            connections=(),
+            capture_batch_size=0,
+        )
 
 
 def test_model_rejects_connection_to_unknown_layer():
