@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Сравнение запусков · bioplast{% endblock %}
+{% block head %}<script src="/assets/plotly.min.js"></script>{% endblock %}
+{% block content %}
+<nav class="breadcrumb"><a href="/runs">← Все запуски</a></nav>
+
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Причина и результат</p>
+    <h1>Сравнение запусков</h1>
+    <p class="lede">Diff параметров, изменение итогов и фактические кривые обучения без интерполяции.</p>
+  </div>
+</section>
+
+<section class="panel compare-picker-panel">
+  <form id="compare-form" class="compare-picker">
+    <label class="compare-baseline-label">Baseline
+      <select id="compare-baseline" name="baseline" required>
+        <option value="">Загрузка каталога…</option>
+      </select>
+      <span>Точка отсчёта для diff и дельт.</span>
+    </label>
+    <fieldset>
+      <legend>Кандидаты <span id="candidate-count">0 / 4</span></legend>
+      <div id="candidate-list" class="candidate-list"><p class="empty">Загрузка…</p></div>
+    </fieldset>
+    <div class="compare-actions">
+      <button id="compare-reset" class="button" type="reset">Сбросить</button>
+      <button id="compare-submit" class="button button-primary" type="submit">Сравнить</button>
+    </div>
+  </form>
+</section>
+
+<div id="compare-error" class="notice notice-error hidden" role="alert"></div>
+<section id="compare-warnings" class="panel hidden">
+  <div class="panel-heading"><h2>Ограничения сравнения</h2></div>
+  <ul id="compare-warning-list" class="warning-list"></ul>
+</section>
+
+<section id="compare-results" class="hidden">
+  <div id="compare-legend" class="compare-legend" aria-label="Сравниваемые запуски"></div>
+
+  <section class="panel compare-table-panel">
+    <div class="panel-heading">
+      <div><h2>Изменения параметров</h2><p>Показаны только различающиеся поля config.json.</p></div>
+    </div>
+    <div id="config-diff-table" class="table-wrap"></div>
+  </section>
+
+  <section class="panel compare-table-panel">
+    <div class="panel-heading">
+      <div><h2>Итоговые метрики</h2><p>Δ = кандидат − baseline; относительная дельта показывается только при ненулевом baseline.</p></div>
+    </div>
+    <div id="final-delta-table" class="table-wrap"></div>
+  </section>
+
+  <section class="panel charts-panel">
+    <div class="panel-heading">
+      <div><h2>Кривые обучения</h2><p>Каждый ряд использует сохранённые step/epoch; отсутствующие точки не интерполируются.</p></div>
+    </div>
+    <div id="compare-charts" class="charts-grid"></div>
+  </section>
+</section>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', path='/compare.js') }}" defer></script>{% endblock %}

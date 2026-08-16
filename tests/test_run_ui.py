@@ -62,6 +62,12 @@ def test_detail_page_uses_local_plotly_and_live_log_script(tmp_path):
     assert 'src="/assets/plotly.min.js"' in page.text
     assert "cdn.plot.ly" not in page.text
     assert "pollLog" in script.text and "Plotly.newPlot" in script.text
+    assert "gate.title =" in script.text
+    assert 'gate.append(node("span"' not in script.text
+    assert "Сбросить масштаб" in script.text
+    assert 'dragmode: "pan"' in script.text
+    assert "Скролл двигает страницу" not in script.text
+    assert "Zoom / pan активны" not in script.text
 
 
 def test_detail_page_contains_rerun_form_and_live_diff(tmp_path):
@@ -74,6 +80,33 @@ def test_detail_page_contains_rerun_form_and_live_diff(tmp_path):
     assert "Поставить в очередь" in page.text
     assert f"/api/runs/${{encodedRunId}}/rerun" in script.text
     assert "renderRerunDiff" in script.text
+
+
+def test_comparison_page_uses_local_plotly_and_comparison_api(tmp_path):
+    client, _ = _client(tmp_path)
+
+    page = client.get("/compare")
+    script = client.get("/static/compare.js")
+    css = client.get("/static/app.css")
+
+    assert page.status_code == script.status_code == css.status_code == 200
+    assert "Сравнение запусков" in page.text
+    assert 'src="/assets/plotly.min.js"' in page.text
+    assert "/static/compare.js" in page.text
+    assert "cdn.plot.ly" not in page.text
+    assert "/api/compare?" in script.text
+    assert "connectgaps: false" in script.text
+    assert "missing_run_ids" in script.text
+    assert 'width: isBaseline ? 5 : 2' in script.text
+    assert 'symbol: isBaseline ? "circle-open" : "circle"' in script.text
+    assert "gate.title =" in script.text
+    assert 'gate.append(node("span"' not in script.text
+    assert "Сбросить масштаб" in script.text
+    assert 'dragmode: "pan"' in script.text
+    assert "Скролл двигает страницу" not in script.text
+    assert "Zoom / pan активны" not in script.text
+    assert "grid-template-columns: minmax(0, .8fr) minmax(0, 1.4fr) auto" in css.text
+    assert ".compare-picker select { width: 100%; min-width: 0" in css.text
 
 
 def test_plotly_bundle_is_served_locally_and_cached(tmp_path):

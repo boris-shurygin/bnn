@@ -97,6 +97,17 @@ function renderHeader(manifest, config, metrics) {
     parentLink.href = `/runs/${encodeURIComponent(manifest.parent_run_id)}`;
     parentNotice.append(parentLink);
   }
+  const compareLink = document.querySelector("#compare-run-link");
+  const compareParams = new URLSearchParams();
+  if (manifest.parent_run_id) {
+    compareParams.set("baseline", manifest.parent_run_id);
+    compareParams.append("candidate", manifest.run_id);
+    compareLink.textContent = "Сравнить с родителем";
+  } else {
+    compareParams.set("baseline", manifest.run_id);
+    compareLink.textContent = "Добавить к сравнению";
+  }
+  compareLink.href = `/compare?${compareParams}`;
 }
 
 function renderFinal(values) {
@@ -146,7 +157,7 @@ function renderCharts(metrics) {
   for (const [group, series] of groups) {
     const chart = node("div", "chart");
     chart.setAttribute("aria-label", `График ${group}`);
-    charts.append(chart);
+    charts.append(interactiveChartShell(chart));
     const traces = [...series.entries()].map(([key, points]) => ({
       x: points.x, y: points.y, type: "scatter", mode: "lines+markers",
       name: key.includes("/") ? key.split("/").slice(1).join("/") : key,
@@ -161,9 +172,40 @@ function renderCharts(metrics) {
       xaxis: { title: stepKey, gridcolor: "#1d3241", zerolinecolor: "#294254" },
       yaxis: { type: useLog ? "log" : "linear", gridcolor: "#1d3241", zerolinecolor: "#294254" },
       legend: { orientation: "h", y: 1.12, x: 1, xanchor: "right" },
-      hovermode: "x unified", uirevision: `${runId}:${group}`,
-    }, { responsive: true, displaylogo: false, scrollZoom: true });
+      hovermode: "x unified", dragmode: "pan", uirevision: `${runId}:${group}`,
+    }, { responsive: true, displayModeBar: false, scrollZoom: true });
   }
+}
+
+function deactivateChart(shell) {
+  shell.classList.remove("chart-interactive");
+  shell.querySelector(".chart-interaction-gate").classList.remove("hidden");
+}
+
+function activateChart(shell) {
+  document.querySelectorAll(".chart-shell.chart-interactive").forEach(active => {
+    if (active !== shell) deactivateChart(active);
+  });
+  shell.classList.add("chart-interactive");
+  shell.querySelector(".chart-interaction-gate").classList.add("hidden");
+}
+
+function interactiveChartShell(chart) {
+  const shell = node("div", "chart-shell");
+  const reset = node("button", "chart-reset", "Сбросить масштаб");
+  reset.type = "button";
+  reset.addEventListener("click", () => {
+    Plotly.relayout(chart, { "xaxis.autorange": true, "yaxis.autorange": true });
+  });
+  const canvas = node("div", "chart-canvas");
+  const gate = node("button", "chart-interaction-gate");
+  gate.type = "button";
+  gate.setAttribute("aria-label", "Включить масштабирование и панорамирование графика");
+  gate.title = "Кликните, чтобы активировать график. ЛКМ — pan, колесо — zoom.";
+  gate.addEventListener("click", () => activateChart(shell));
+  canvas.append(chart, gate, reset);
+  shell.append(canvas);
+  return shell;
 }
 
 function renderArtifacts(items) {
@@ -380,6 +422,15 @@ document.querySelector("#rerun-form").addEventListener("submit", async event => 
 });
 
 document.querySelector("#reload-log").addEventListener("click", () => pollLog(true));
+document.addEventListener("pointerdown", event => {
+  const active = document.querySelector(".chart-shell.chart-interactive");
+  if (active && !active.contains(event.target)) deactivateChart(active);
+});
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape") {
+    document.querySelectorAll(".chart-shell.chart-interactive").forEach(deactivateChart);
+  }
+});
 setInterval(() => {
   if (document.querySelector("#follow-log").checked) pollLog();
 }, 1500);

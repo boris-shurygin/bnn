@@ -15,13 +15,20 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Query, Request
-from pydantic import BaseModel
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
 from bioplast.runner import ContractError, RunScheduler, RunStatus
 from bioplast.runner.run import project_root
+from bioplast.viz.comparison import RunComparisonError, compare_runs
 from bioplast.viz.repository import (
     ArtifactNotFound,
     RunNotFound,
@@ -98,6 +105,12 @@ def create_app(
     ) -> JSONResponse:
         return JSONResponse(status_code=503, content={"detail": str(exc)})
 
+    @app.exception_handler(RunComparisonError)
+    async def comparison_validation_handler(
+        _request: Request, exc: RunComparisonError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
+
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "runs_dir": str(repository.runs_dir)}
@@ -109,6 +122,10 @@ def create_app(
     @app.get("/runs", response_class=HTMLResponse, include_in_schema=False)
     def runs_page(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(request=request, name="runs.html", context={})
+
+    @app.get("/compare", response_class=HTMLResponse, include_in_schema=False)
+    def compare_page(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(request=request, name="compare.html", context={})
 
     @app.get("/runs/{run_id}", response_class=HTMLResponse, include_in_schema=False)
     def run_page(request: Request, run_id: str) -> HTMLResponse:
@@ -155,6 +172,13 @@ def create_app(
     @app.get("/api/runs/{run_id}")
     def get_run(run_id: str) -> dict:
         return repository.get_run(run_id)
+
+    @app.get("/api/compare")
+    def compare(
+        baseline: str,
+        candidate: list[str] = Query(),
+    ) -> dict[str, Any]:
+        return compare_runs(repository, baseline, candidate)
 
     @app.get("/api/runs/{run_id}/rerun")
     def preview_rerun(run_id: str) -> dict[str, Any]:
