@@ -7,6 +7,9 @@ V.8 добавила типизированные команды активно�
 результаты API не перезаписывает; управление дописывает отдельный журнал команд.
 V.9 добавила дочернюю интерактивную XOR-сессию, ручной вход и чтение событий со
 ссылками на согласованные snapshots.
+V.10 заменила общий scheduler на долговечный `RunSupervisor`: main pool отделён
+от disposable debug workers, а suspended/interrupted XOR-сессия продолжает тот
+же `run_id` из проверенного recovery-поколения.
 
 Запуск из корня проекта:
 
@@ -18,17 +21,17 @@ uv run uvicorn bioplast.viz.api:app --reload
 `BIOPLAST_RUNS_DIR` или аргументом `create_app(runs_dir)` в тестах/embedding.
 OpenAPI доступен на `/docs`.
 
-Число процессов веб-очереди по умолчанию равно одному и задаётся перед запуском:
+Число main и debug процессов задаётся независимо:
 
 ```powershell
 $env:BIOPLAST_RUN_WORKERS = "2"
+$env:BIOPLAST_DEBUG_WORKERS = "2"
 uv run uvicorn bioplast.viz.api:app --reload
 ```
 
-В V.9 это один общий пул, поэтому долгоживущая debug-сессия может задержать
-обычный запуск. Целевая схема V.10 с отдельными main/debug executors,
-activity-based гибернацией и recovery описана в
-[`worker-lifecycle.md`](worker-lifecycle.md).
+Таймаут отсутствия пользователя по умолчанию — 1800 секунд и настраивается
+`BIOPLAST_DEBUG_INACTIVE_TIMEOUT_SEC`. Периоды worker heartbeat/stale и grace
+shutdown задаются переменными из [`worker-lifecycle.md`](worker-lifecycle.md).
 
 Браузерный интерфейс доступен на `/runs`: список обновляется автоматически,
 карточка прогона показывает параметры, окружение, git provenance, интерактивные
@@ -51,6 +54,7 @@ activity-based гибернацией и recovery описана в
 | `POST /api/runs/{id}/debug` | Создать running-дочернюю сессию XOR-forward из checkpoint |
 | `GET /api/runs/{id}/control` | Фактический/requested статус, задержка и доступные команды |
 | `POST /api/runs/{id}/control` | Добавить типизированную команду управления активным запуском |
+| `POST /api/runs/{id}/activity` | Продлить activity lease видимой debug-сессии после взаимодействия пользователя |
 | `GET /api/runs/{id}/events` | Дочитать версионированные события после заданного `seq` |
 | `GET /api/runs/{id}/metrics` | Исходный `metrics.json` |
 | `GET /api/runs/{id}/log` | Часть UTF-8 лога с байтовыми offset/limit |
@@ -147,7 +151,9 @@ worker-процесса.
 - `status` — фактическое состояние из `run.json`;
 - `requested_status` — состояние, заданное уже записанными командами, которое
   worker может ещё не успеть применить;
-- текущую `delay_ms`, последний `last_command_seq` и `available_commands`.
+- текущую `delay_ms`, последний `last_command_seq` и `available_commands`;
+- `lifecycle`: pool, текущую worker/activity lease, recovery generation,
+  возможность resume и явную причину недоступности.
 
 `POST /api/runs/{id}/control` принимает одну команду:
 
@@ -166,6 +172,12 @@ worker-процесса.
 можно заранее поставить на паузу или замедлить. Повторные несовместимые команды
 возвращают 409, неверный payload — 422, успешная запись в `commands.jsonl` —
 `202 Accepted` с записанной командой и обновлённым control state.
+
+В `suspended`/`interrupted` команды `resume`, `step` и `set_input` доступны
+только при валидном checksum и совместимом recovery adapter. Команда сначала
+продлевает activity lease, затем будит новый debug-процесс; обычные команды
+живому worker процесс не пересоздают. `cancel` завершает неактивную сессию без
+создания worker. Фоновый GET/polling lease не продлевает.
 
 Control state также возвращает объект `debug` из capabilities сессии и
 `accepts_input`. UI не определяет отладочный режим по имени эксперимента:
@@ -186,7 +198,7 @@ API не убивает дерево процессов посреди обно�
 завершённого `xor_backprop` с
 `model.json` и `checkpoint.pt`. Сервер резервирует новый каталог, записывает
 `parent_run_id`, копирует малый инспекционный manifest с новым `run_id`, заранее
-передаёт сессию обычному scheduler в непрерывном режиме. Для послойного forward
+передаёт сессию debug-очереди supervisor в непрерывном режиме. Для послойного forward
 пользователь сначала отправляет `pause`. Сам checkpoint читает
 только дочерний worker. Ответ `202 Accepted` содержит URL новой карточки.
 Ограничение относится к набору реализованных адаптеров, а не к общему

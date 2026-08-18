@@ -27,6 +27,7 @@ from bioplast.runner.contracts import (
     utc_offset_iso,
     write_run_manifest,
 )
+from bioplast.runner.lifecycle import activity_expired
 
 MAX_DELAY_MS = 60_000
 _APPEND_LOCK = Lock()
@@ -126,6 +127,10 @@ class RunCancelled(RuntimeError):
     """Кооперативная отмена, замеченная в безопасной точке эксперимента."""
 
 
+class RunSuspended(RuntimeError):
+    """Debug worker освободил процесс в safe point после истечения activity lease."""
+
+
 def read_run_commands(run_dir: Path | str, *, after_seq: int = 0) -> list[RunCommand]:
     """Прочитать только полные строки журнала и проверить монотонность seq."""
     run_dir = Path(run_dir).resolve()
@@ -214,6 +219,7 @@ class CooperativeRunControl:
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
         logger: Any | None = None,
+        suspend_when_inactive: bool = False,
     ) -> None:
         if poll_interval <= 0:
             raise ValueError("poll_interval должен быть положительным")
@@ -222,6 +228,7 @@ class CooperativeRunControl:
         self._sleep = sleep
         self._monotonic = monotonic
         self._logger = logger
+        self._suspend_when_inactive = suspend_when_inactive
         self._last_seq = 0
         manifest = load_run_manifest(self.run_dir)
         self._mode = (
@@ -240,6 +247,10 @@ class CooperativeRunControl:
         return self._delay_ms
 
     @property
+    def mode(self) -> RunStatus:
+        return self._mode
+
+    @property
     def last_seq(self) -> int:
         return self._last_seq
 
@@ -251,6 +262,25 @@ class CooperativeRunControl:
     def input_values(self) -> tuple[float, ...] | None:
         return self._input_values
 
+    def restore(
+        self,
+        *,
+        last_seq: int,
+        mode: str = "running",
+        delay_ms: int = 0,
+        input_seq: int = 0,
+        input_values: tuple[float, ...] | None = None,
+    ) -> None:
+        """Restore the command cursor before a resumed adapter starts polling."""
+        if last_seq < 0 or input_seq < 0:
+            raise ValueError("command cursors не могут быть отрицательными")
+        self._last_seq = int(last_seq)
+        self._mode = RunStatus.PAUSED if mode == RunStatus.PAUSED.value else RunStatus.RUNNING
+        self._delay_ms = int(delay_ms)
+        self._input_seq = int(input_seq)
+        self._input_values = input_values
+        self._step_budget = 0
+
     def wait_for_input(
         self,
         *,
@@ -261,6 +291,7 @@ class CooperativeRunControl:
             self._apply_new_commands()
             if self._cancel_requested:
                 raise RunCancelled("прогон отменён пользователем")
+            self._raise_if_inactive()
             self._transition(self._mode)
             if self._input_seq > after_seq and self._input_values is not None:
                 return self._input_seq, self._input_values
@@ -278,6 +309,7 @@ class CooperativeRunControl:
             self._apply_new_commands()
             if self._cancel_requested:
                 raise RunCancelled("прогон отменён пользователем")
+            self._raise_if_inactive()
 
             if self._mode is RunStatus.RUNNING:
                 self._transition(RunStatus.RUNNING)
@@ -338,8 +370,13 @@ class CooperativeRunControl:
             self._apply_new_commands()
             if self._cancel_requested:
                 raise RunCancelled("прогон отменён пользователем")
+            self._raise_if_inactive()
             if pause_interrupts and self._mode is RunStatus.PAUSED:
                 return False
+
+    def _raise_if_inactive(self) -> None:
+        if self._suspend_when_inactive and activity_expired(self.run_dir):
+            raise RunSuspended("activity lease debug-сессии истекла")
 
     def _transition(self, status: RunStatus) -> None:
         manifest = load_run_manifest(self.run_dir)

@@ -109,6 +109,8 @@ textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; 
 .status-completed { color: var(--green); border-color: #2c6745; background: #10291e; }
 .status-running, .status-queued { color: var(--cyan); border-color: #2c6667; background: #102a2c; }
 .status-paused { color: var(--amber); border-color: #765b2e; background: #302411; }
+.status-suspended { color: #c5a7ff; border-color: #644b8b; background: #241936; }
+.status-interrupted { color: #ffadad; border-color: #814646; background: #351919; }
 .status-failed { color: var(--red); border-color: #713641; background: #30151b; }
 .status-cancelled { color: #aebbc5; border-color: #455764; background: #1a252d; }
 .status-loading { color: var(--blue); border-color: #355c85; background: #102337; }

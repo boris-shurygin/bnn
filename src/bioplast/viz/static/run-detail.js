@@ -4,6 +4,7 @@ const runId = JSON.parse(document.querySelector("#run-id-data").textContent);
 const encodedRunId = encodeURIComponent(runId);
 const statusNames = {
   queued: "в очереди", running: "в работе", paused: "пауза",
+  suspended: "гибернация", interrupted: "прерван",
   completed: "завершён", failed: "ошибка", cancelled: "отменён",
 };
 const terminalStatuses = new Set(["completed", "failed", "cancelled"]);
@@ -27,6 +28,7 @@ let xorSnapshot = null;
 let xorSnapshotLoading = false;
 let xorCanSetInput = false;
 let xorInputLoading = false;
+let lastUserInteractionAt = Date.now();
 
 function debugCapabilities(config) {
   if (config?.debug && typeof config.debug === "object" && !Array.isArray(config.debug)) {
@@ -911,8 +913,27 @@ function renderControl(control) {
   const requested = statusNames[control.requested_status] || control.requested_status;
   const pending = control.status === control.requested_status
     ? "" : ` · запрошено: ${requested}`;
+  const lifecycle = control.lifecycle || {};
+  const worker = lifecycle.worker;
+  const recovery = lifecycle.recovery;
+  const runtime = worker
+    ? ` · ${lifecycle.pool}-worker #${worker.attempt}, heartbeat ${formatDate(worker.heartbeat_at)}`
+    : ` · ${lifecycle.pool || "—"}-worker отсутствует`;
+  const durable = recovery
+    ? ` · recovery #${recovery.generation} (${recovery.safe_point_cursor})`
+    : lifecycle.resume_unavailable_reason ? ` · resume: ${lifecycle.resume_unavailable_reason}` : "";
   showNotice("#control-message",
-    `Состояние: ${actual}${pending} · задержка ${control.delay_ms ?? 0} мс · команда #${control.last_command_seq}`);
+    `Состояние: ${actual}${pending} · задержка ${control.delay_ms ?? 0} мс · команда #${control.last_command_seq}${runtime}${durable}`);
+}
+
+async function renewActivity() {
+  if (!detail || !isDebugSession(detail.config) || document.visibilityState !== "visible") return;
+  if (Date.now() - lastUserInteractionAt > 20000) return;
+  try {
+    await fetch(`/api/runs/${encodedRunId}/activity`, { method: "POST" });
+  } catch (_error) {
+    // Activity heartbeat is advisory; control polling will show connectivity errors.
+  }
 }
 
 async function loadControl() {
@@ -1160,6 +1181,9 @@ async function loadRerunPreview() {
 }
 
 document.querySelector("#start-xor-debug").addEventListener("click", startXorDebug);
+document.addEventListener("pointerdown", () => { lastUserInteractionAt = Date.now(); }, { passive: true });
+document.addEventListener("keydown", () => { lastUserInteractionAt = Date.now(); });
+setInterval(renewActivity, 15000);
 document.querySelector("#xor-input-form").addEventListener("submit", event => {
   event.preventDefault();
   submitXorInput();

@@ -1,6 +1,6 @@
 # Воркеры, пулы и восстановление запусков
 
-Этот документ описывает текущую схему V.9 и целевой контракт V.10. Цель V.10 —
+Этот документ описывает реализованный контракт V.10. Его цель —
 не только освободить основной пул от долгоживущих debug-сессий, но и позволить
 продолжить тот же запуск после гибернации worker, падения процесса, перезапуска
 сервера или отключения питания.
@@ -162,7 +162,8 @@ any nonterminal ──cancel──> cancelled
 runs/<run_id>/recovery/
   state.json       # версия, attempt, safe-point cursor, command/event seq,
                    # progress, checkpoint checksum, время записи
-  checkpoint.pt    # model, optimizer и adapter-specific state
+  checkpoint-<generation>.pt # неизменяемый model/optimizer/adapter state;
+                             # state.json атомарно переключает поколение
   rng.pt           # Python/NumPy/torch CPU/CUDA RNG при необходимости
 ```
 
@@ -301,11 +302,9 @@ optimizer, permutation текущей эпохи и позиция batch. Для
 
 Закрытие вкладки браузера не отменяет и не завершает запуск.
 
-## Текущее ограничение V.9
+## Текущее ограничение после V.10
 
-Сейчас веб-приложение создаёт один общий `RunScheduler`; его размер по умолчанию
-равен одному. Долгоживущая debug-сессия поэтому блокирует обычный MNIST в очереди,
-а `shutdown(wait=False)` не является протоколом восстановления. Текущие
-`checkpoint.pt` и snapshots достаточны для инспекции, но ещё не являются полным
-recovery-контрактом. До реализации V.10 перезапуск активного worker нельзя считать
-безопасным и воспроизводимым resume.
+Debug-сессии уже отделены от main pool и имеют полный recovery-контракт XOR.
+Обычное обучение пока не объявляет resume-adapter, поэтому stale main run
+остаётся `interrupted` и доступен для инспекции, но не запускается сначала молча.
+Model/optimizer, batch/sampler и RNG для XOR/MNIST обучения добавляются в V.11.

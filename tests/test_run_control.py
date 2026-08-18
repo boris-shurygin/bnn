@@ -260,6 +260,7 @@ def test_real_process_pool_pause_step_resume_smoke(tmp_path):
             pytest.fail("worker не перешёл в paused через настоящий process pool")
 
         append_run_command(run_dir, RunCommandType.STEP)
+        deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             log_path = run_dir / "run.log"
             if log_path.exists() and "разрешена одна атомарная операция" in log_path.read_text(
@@ -272,6 +273,7 @@ def test_real_process_pool_pause_step_resume_smoke(tmp_path):
 
         assert load_run_manifest(run_dir).status is RunStatus.PAUSED
         append_run_command(run_dir, RunCommandType.RESUME)
+        deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             if load_run_manifest(run_dir).status is RunStatus.COMPLETED:
                 break

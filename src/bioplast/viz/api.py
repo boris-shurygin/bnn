@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from bioplast.runner import ContractError, RunCommandType, RunScheduler, RunStatus
+from bioplast.runner import ContractError, RunCommandType, RunStatus, RunSupervisor
 from bioplast.runner.run import project_root
 from bioplast.viz.comparison import RunComparisonError, compare_runs
 from bioplast.viz.control import (
@@ -79,7 +79,15 @@ def create_app(
 ) -> FastAPI:
     root = Path(runs_dir) if runs_dir is not None else _default_runs_dir()
     repository = RunRepository(root)
-    scheduler = scheduler or RunScheduler(workers=_default_workers())
+    scheduler = scheduler or RunSupervisor(
+        root,
+        main_workers=_default_workers(),
+        debug_workers=_default_debug_workers(),
+        debug_inactive_timeout_sec=_env_float("BIOPLAST_DEBUG_INACTIVE_TIMEOUT_SEC", 1800),
+        heartbeat_sec=_env_float("BIOPLAST_WORKER_HEARTBEAT_SEC", 5),
+        stale_sec=_env_float("BIOPLAST_WORKER_STALE_SEC", 30),
+        shutdown_grace_sec=_env_float("BIOPLAST_SHUTDOWN_GRACE_SEC", 15),
+    )
     reruns = RerunService(repository, scheduler)
     controls = RunControlService(repository, scheduler)
     xor_debug = XorDebugService(repository, scheduler)
@@ -89,6 +97,9 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        start = getattr(scheduler, "start", None)
+        if start is not None:
+            start()
         yield
         shutdown = getattr(scheduler, "shutdown", None)
         if shutdown is not None:
@@ -196,7 +207,10 @@ def create_app(
 
     @app.get("/runs/{run_id}", response_class=HTMLResponse, include_in_schema=False)
     def run_page(request: Request, run_id: str) -> HTMLResponse:
-        repository.resolve_run(run_id)
+        run_dir = repository.resolve_run(run_id)
+        touch = getattr(scheduler, "touch", None)
+        if touch is not None:
+            touch(run_dir)
         return templates.TemplateResponse(
             request=request,
             name="run-detail.html",
@@ -296,6 +310,13 @@ def create_app(
             input_values=request.input_values,
         )
 
+    @app.post("/api/runs/{run_id}/activity", status_code=202)
+    def renew_run_activity(run_id: str) -> dict[str, Any]:
+        run_dir = repository.resolve_run(run_id)
+        touch = getattr(scheduler, "touch", None)
+        activity = touch(run_dir) if touch is not None else None
+        return {"run_id": run_id, "activity": activity}
+
     @app.get("/api/runs/{run_id}/events")
     def get_events(
         run_id: str,
@@ -342,6 +363,21 @@ def _default_workers() -> int:
         return max(1, int(configured))
     except ValueError:
         return 1
+
+
+def _default_debug_workers() -> int:
+    configured = os.environ.get("BIOPLAST_DEBUG_WORKERS", "2")
+    try:
+        return max(1, int(configured))
+    except ValueError:
+        return 2
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return max(0.001, float(os.environ.get(name, str(default))))
+    except ValueError:
+        return default
 
 
 @lru_cache(maxsize=1)

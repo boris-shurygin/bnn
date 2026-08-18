@@ -22,7 +22,7 @@ import sys
 import time
 import traceback
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -36,7 +36,8 @@ from bioplast.runner.contracts import (
     utc_offset_iso,
     write_run_manifest,
 )
-from bioplast.runner.control import CooperativeRunControl, RunCancelled
+from bioplast.runner.control import CooperativeRunControl, RunCancelled, RunSuspended
+from bioplast.runner.lifecycle import load_recovery, touch_activity
 from bioplast.runner.experiment import ExperimentResult, finalize_experiment
 
 LOGGER_NAME = "bioplast.run"
@@ -126,6 +127,8 @@ class RunContext:
     seed: int
     log: logging.Logger
     control: CooperativeRunControl
+    attempt: int = 1
+    pool_kind: str | None = None
     metrics: MetricsRecorder = field(default_factory=MetricsRecorder)
 
     def artifact(self, name: str) -> Path:
@@ -453,10 +456,14 @@ def fail_prepared_run(run_dir: Path | str, error: str) -> None:
 
 
 def cancel_prepared_run(run_dir: Path | str) -> bool:
-    """Отменить ещё не стартовавший queued-прогон и сохранить терминальный контракт."""
+    """Отменить прогон без worker: queued, suspended или interrupted."""
     run_dir = Path(run_dir).resolve()
     manifest = load_run_manifest(run_dir)
-    if manifest.status is not RunStatus.QUEUED:
+    if manifest.status not in {
+        RunStatus.QUEUED,
+        RunStatus.SUSPENDED,
+        RunStatus.INTERRUPTED,
+    }:
         return False
     config = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
     metrics_path = run_dir / "metrics.json"
@@ -479,26 +486,38 @@ def cancel_prepared_run(run_dir: Path | str) -> bool:
     return True
 
 
-def run_prepared(run_dir: Path | str) -> Path:
+def run_prepared(
+    run_dir: Path | str,
+    *,
+    resume: bool = False,
+    attempt: int = 1,
+    pool_kind: str | None = None,
+    debug_inactive_timeout_sec: float | None = None,
+) -> Path:
     """Выполняет атомарно подготовленный прогон из существующей очереди."""
     run_dir = Path(run_dir).resolve()
     manifest = load_run_manifest(run_dir)
     if manifest.run_id != run_dir.name:
         raise ContractError("run_id подготовленного прогона не совпадает с каталогом")
-    if manifest.status is not RunStatus.QUEUED:
-        raise ContractError(f"ожидался статус queued, получен {manifest.status.value}")
+    allowed = (
+        {RunStatus.SUSPENDED, RunStatus.INTERRUPTED}
+        if resume
+        else {RunStatus.QUEUED}
+    )
+    if manifest.status not in allowed:
+        expected = "suspended/interrupted" if resume else "queued"
+        raise ContractError(f"ожидался статус {expected}, получен {manifest.status.value}")
     config = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
     validate_run_config(config)
 
     started_at = datetime.now().astimezone()
-    manifest = RunManifest(
-        run_id=manifest.run_id,
+    manifest = replace(
+        manifest,
         status=RunStatus.RUNNING,
-        experiment=manifest.experiment,
-        started_at=started_at.isoformat(timespec="seconds"),
+        started_at=manifest.started_at or started_at.isoformat(timespec="seconds"),
         updated_at=started_at.isoformat(timespec="seconds"),
-        parent_run_id=manifest.parent_run_id,
-        artifacts=manifest.artifacts,
+        finished_at=None,
+        duration_sec=None,
     )
     write_run_manifest(run_dir, manifest)
     run_id = run_dir.name
@@ -508,7 +527,13 @@ def run_prepared(run_dir: Path | str) -> Path:
     device = resolve_device(device_spec)
     seed = int(config.get("seed", 0))
 
-    logger.info("старт: %s", config.get("experiment"))
+    logger.info(
+        "%s: %s (attempt=%d, pool=%s)",
+        "возобновление" if resume else "старт",
+        config.get("experiment"),
+        attempt,
+        pool_kind or "direct",
+    )
     git = git_provenance()
     _log_provenance(logger, git)
     env = _log_environment(logger, device, device_spec)
@@ -516,14 +541,41 @@ def run_prepared(run_dir: Path | str) -> Path:
     _seed_everything(seed)
     logger.info("seed = %d", seed)
 
+    control = CooperativeRunControl(
+        run_dir,
+        logger=logger,
+        suspend_when_inactive=pool_kind == "debug",
+    )
+    if resume:
+        _recovery_state, recovery_payload = load_recovery(run_dir)
+        saved_control = recovery_payload.get("control", {})
+        if not isinstance(saved_control, dict):
+            raise ContractError("recovery control должен быть mapping")
+        raw_input = saved_control.get("input_values")
+        control.restore(
+            last_seq=int(saved_control.get("last_seq", 0)),
+            mode=str(saved_control.get("mode", "running")),
+            delay_ms=int(saved_control.get("delay_ms", 0)),
+            input_seq=int(saved_control.get("input_seq", 0)),
+            input_values=(
+                tuple(float(value) for value in raw_input)
+                if isinstance(raw_input, (list, tuple))
+                else None
+            ),
+        )
+
     ctx = RunContext(
         run_id=run_id,
         run_dir=run_dir,
         device=device,
         seed=seed,
         log=logger,
-        control=CooperativeRunControl(run_dir, logger=logger),
+        control=control,
+        attempt=attempt,
+        pool_kind=pool_kind,
     )
+    if pool_kind == "debug" and debug_inactive_timeout_sec is not None:
+        touch_activity(run_dir, timeout_sec=debug_inactive_timeout_sec)
 
     started = time.perf_counter()
     status, final, error = "ok", {}, None
@@ -541,12 +593,25 @@ def run_prepared(run_dir: Path | str) -> Path:
     except RunCancelled:
         status = "cancelled"
         logger.info("прогон кооперативно отменён в безопасной точке")
+    except RunSuspended:
+        status = "suspended"
+        logger.info("debug-сессия гибернирована в безопасной точке")
     except Exception:
         status = "failed"
         error = traceback.format_exc()
         logger.error("прогон упал:\n%s", error)
     duration = time.perf_counter() - started
     env.update(_gpu_usage(device, logger))
+
+    if status == "suspended":
+        write_run_manifest(
+            run_dir,
+            replace(manifest, status=RunStatus.SUSPENDED, updated_at=utc_offset_iso()),
+        )
+        for handler in logger.handlers:
+            handler.close()
+        logger.handlers.clear()
+        return run_dir
 
     metrics = {
         "run_id": run_id,

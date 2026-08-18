@@ -14,6 +14,7 @@ from bioplast.runner import (
     cancel_prepared_run,
     load_run_manifest,
     read_run_commands,
+    recovery_availability,
 )
 from bioplast.viz.repository import RunRepository
 
@@ -48,6 +49,9 @@ class RunControlService:
             if manifest.status is RunStatus.PAUSED
             else RunStatus.RUNNING
         )
+        recovery = recovery_availability(run_dir)
+        recovery_seq = int((recovery.state or {}).get("last_command_seq", 0))
+        pending_wake = False
         delay_ms = 0
         cancel_requested = False
         input_seq = 0
@@ -64,17 +68,32 @@ class RunControlService:
             elif item.command is RunCommandType.SET_INPUT:
                 input_seq = item.seq
                 input_values = list(item.input_values or ())
+                if item.seq > recovery_seq:
+                    pending_wake = True
             elif item.command is RunCommandType.CANCEL:
                 cancel_requested = True
+            if item.seq > recovery_seq and item.command in {
+                RunCommandType.RESUME,
+                RunCommandType.STEP,
+            }:
+                pending_wake = True
 
         available: list[str] = []
         if not manifest.status.terminal and not cancel_requested:
-            if desired is RunStatus.PAUSED:
+            if manifest.status in {RunStatus.SUSPENDED, RunStatus.INTERRUPTED}:
+                if recovery.available:
+                    available.append(RunCommandType.RESUME.value)
+                    if debug and debug.get("supports_step"):
+                        available.append(RunCommandType.STEP.value)
+            elif desired is RunStatus.PAUSED:
                 available.extend([RunCommandType.RESUME.value, RunCommandType.STEP.value])
             else:
                 available.append(RunCommandType.PAUSE.value)
             available.append(RunCommandType.SET_DELAY.value)
-            if accepts_input:
+            if accepts_input and (
+                manifest.status not in {RunStatus.SUSPENDED, RunStatus.INTERRUPTED}
+                or recovery.available
+            ):
                 available.append(RunCommandType.SET_INPUT.value)
             available.append(RunCommandType.CANCEL.value)
 
@@ -82,6 +101,8 @@ class RunControlService:
             requested_status = manifest.status
         elif cancel_requested:
             requested_status = RunStatus.CANCELLED
+        elif manifest.status in {RunStatus.SUSPENDED, RunStatus.INTERRUPTED} and not pending_wake:
+            requested_status = manifest.status
         else:
             requested_status = desired
         return {
@@ -95,6 +116,18 @@ class RunControlService:
             "input_seq": input_seq,
             "input_values": input_values,
             "available_commands": available,
+            "lifecycle": (
+                self.scheduler.describe(run_dir)
+                if hasattr(self.scheduler, "describe")
+                else {
+                    "pool": "debug" if debug else "main",
+                    "worker": None,
+                    "activity": None,
+                    "recovery": recovery.state,
+                    "resume_available": recovery.available,
+                    "resume_unavailable_reason": recovery.reason,
+                }
+            ),
         }
 
     def issue(
@@ -161,6 +194,9 @@ class RunControlService:
                 )
 
             run_dir = self.repository.resolve_run(run_id)
+            touch = getattr(self.scheduler, "touch", None)
+            if touch is not None:
+                touch(run_dir)
             item = append_run_command(
                 run_dir,
                 command,
@@ -171,10 +207,29 @@ class RunControlService:
                     else None
                 ),
             )
-            if command is RunCommandType.CANCEL and before["status"] == RunStatus.QUEUED.value:
+            if command is RunCommandType.CANCEL and before["status"] in {
+                RunStatus.QUEUED.value,
+                RunStatus.SUSPENDED.value,
+                RunStatus.INTERRUPTED.value,
+            }:
                 cancel = getattr(self.scheduler, "cancel", None)
                 if cancel is not None:
                     cancel(Path(run_dir))
                 cancel_prepared_run(run_dir)
+            elif command in {
+                RunCommandType.RESUME,
+                RunCommandType.STEP,
+                RunCommandType.SET_INPUT,
+            } and before["status"] in {
+                RunStatus.SUSPENDED.value,
+                RunStatus.INTERRUPTED.value,
+            }:
+                wake = getattr(self.scheduler, "wake", None)
+                if wake is None:
+                    raise RunControlConflict("scheduler не поддерживает пробуждение сессии")
+                try:
+                    wake(run_dir)
+                except RuntimeError as exc:
+                    raise RunControlConflict(str(exc)) from exc
 
             return {"command": item.to_dict(), "control": self.state(run_id)}

@@ -86,14 +86,16 @@ renderer определяет только представление данны
 
 ## `run.json`
 
-Целевой жизненный цикл worker, разделение main/debug pools и recovery-контракт
-описаны в [`worker-lifecycle.md`](worker-lifecycle.md). До V.10 существующие
-`checkpoint.pt` и snapshots являются артефактами модели и инспекции, но не дают
-полной гарантии продолжения оборванного Python-процесса.
+Жизненный цикл worker, разделение main/debug pools и recovery-контракт
+описаны в [`worker-lifecycle.md`](worker-lifecycle.md). Итоговый `checkpoint.pt`
+остаётся модельным артефактом, а runtime recovery V.10 хранится отдельно в
+`recovery/` и публикуется поколениями.
 
 Манифест жизненного цикла создаётся атомарно до запуска эксперимента и атомарно
 заменяется при каждом переходе. Допустимые состояния:
-`queued`, `running`, `paused`, `completed`, `failed`, `cancelled`.
+`queued`, `running`, `paused`, `suspended`, `interrupted`, `completed`, `failed`,
+`cancelled`. `suspended` означает штатно освобождённый debug worker с проверенным
+recovery; `interrupted` — потерянную lease, которую нельзя молча запускать с нуля.
 
 Сессия V.8 реализует переходы кооперативно. `pause` меняет фактический статус
 на `paused` только когда worker достиг следующей безопасной точки; `resume`
@@ -101,6 +103,13 @@ renderer определяет только представление данны
 один пропуск через следующую атомарную операцию. `cancel` для queued-задачи
 снимает её с executor и сразу завершает манифест, а работающий процесс замечает
 отмену в safe point и завершает метрики со статусом `cancelled`, не `failed`.
+
+V.10 добавляет `worker.json` с attempt/pool/heartbeat, отдельный `activity.json`
+и `recovery/state.json`. Бинарник recovery неизменяем для одного поколения
+(`checkpoint-<generation>.pt`), а `state.json` атомарно переключается последним,
+поэтому читатель не смешивает checksum двух поколений. Для XOR event tail
+согласуется с recovery после аварии в узком окне между append события и
+публикацией следующего state.
 
 Начиная с V.4 веб-очередь сначала атомарно резервирует новый каталог, записывает
 клонированный `config.json` и создаёт манифест `queued` с `started_at: null`.

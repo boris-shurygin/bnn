@@ -26,6 +26,7 @@ let currentPayload = null;
 
 const statusNames = {
   queued: "в очереди", running: "в работе", paused: "пауза",
+  suspended: "гибернация", interrupted: "прерван",
   completed: "завершён", failed: "ошибка", cancelled: "отменён",
 };
 const terminalStatuses = new Set(["completed", "failed", "cancelled"]);

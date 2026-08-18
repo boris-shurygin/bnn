@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
+from threading import get_ident
 from typing import Any, Iterator, Mapping
 
 CONTRACT_VERSION = 1
@@ -31,6 +34,8 @@ class RunStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     PAUSED = "paused"
+    SUSPENDED = "suspended"
+    INTERRUPTED = "interrupted"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -59,6 +64,9 @@ def default_artifacts() -> dict[str, str]:
         "commands": COMMANDS_FILE,
         "snapshots": "snapshots",
         "checkpoint": CHECKPOINT_FILE,
+        "recovery": "recovery/state.json",
+        "worker": "worker.json",
+        "activity": "activity.json",
     }
 
 
@@ -591,6 +599,8 @@ def _legacy_status(metrics: Mapping[str, Any]) -> RunStatus:
         "crashed": RunStatus.FAILED,
         "cancelled": RunStatus.CANCELLED,
         "paused": RunStatus.PAUSED,
+        "suspended": RunStatus.SUSPENDED,
+        "interrupted": RunStatus.INTERRUPTED,
         "running": RunStatus.RUNNING,
         "queued": RunStatus.QUEUED,
     }
@@ -612,12 +622,22 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(path)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}-{get_ident()}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
+        for attempt in range(20):
+            try:
+                temporary.replace(path)
+                return
+            except PermissionError:
+                if attempt == 19:
+                    raise
+                time.sleep(0.01 * (attempt + 1))
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _validate_header(version: Any, kind: Any, expected_kind: str) -> None:
