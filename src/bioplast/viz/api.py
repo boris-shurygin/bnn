@@ -34,6 +34,16 @@ from bioplast.viz.control import (
     RunControlService,
     RunControlValidationError,
 )
+from bioplast.viz.debug import (
+    XorDebugConflict,
+    XorDebugService,
+    XorDebugSubmissionError,
+)
+from bioplast.viz.deletion import (
+    RunDeletionConflict,
+    RunDeletionService,
+    RunDeletionValidationError,
+)
 from bioplast.viz.repository import (
     ArtifactNotFound,
     RunNotFound,
@@ -55,6 +65,11 @@ class RerunRequest(BaseModel):
 class RunControlRequest(BaseModel):
     command: RunCommandType
     delay_ms: int | None = None
+    input_values: list[float] | None = None
+
+
+class DeleteRunsRequest(BaseModel):
+    run_ids: list[str]
 
 
 def create_app(
@@ -67,6 +82,8 @@ def create_app(
     scheduler = scheduler or RunScheduler(workers=_default_workers())
     reruns = RerunService(repository, scheduler)
     controls = RunControlService(repository, scheduler)
+    xor_debug = XorDebugService(repository, scheduler)
+    deletion = RunDeletionService(repository)
     viz_dir = Path(__file__).resolve().parent
     templates = Jinja2Templates(directory=viz_dir / "templates")
 
@@ -87,6 +104,8 @@ def create_app(
     app.state.run_scheduler = scheduler
     app.state.rerun_service = reruns
     app.state.run_control_service = controls
+    app.state.xor_debug_service = xor_debug
+    app.state.run_deletion_service = deletion
     app.mount("/static", StaticFiles(directory=viz_dir / "static"), name="static")
 
     @app.exception_handler(RunNotFound)
@@ -135,6 +154,30 @@ def create_app(
     ) -> JSONResponse:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
 
+    @app.exception_handler(XorDebugConflict)
+    async def xor_debug_conflict_handler(
+        _request: Request, exc: XorDebugConflict
+    ) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(XorDebugSubmissionError)
+    async def xor_debug_submission_handler(
+        _request: Request, exc: XorDebugSubmissionError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+    @app.exception_handler(RunDeletionValidationError)
+    async def deletion_validation_handler(
+        _request: Request, exc: RunDeletionValidationError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+    @app.exception_handler(RunDeletionConflict)
+    async def deletion_conflict_handler(
+        _request: Request, exc: RunDeletionConflict
+    ) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "runs_dir": str(repository.runs_dir)}
@@ -175,6 +218,7 @@ def create_app(
         seed: int | None = None,
         started_after: datetime | None = None,
         started_before: datetime | None = None,
+        include_debug: bool = True,
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=500),
     ) -> dict:
@@ -185,17 +229,40 @@ def create_app(
             started_after=started_after,
             started_before=started_before,
         )
+        if not include_debug:
+            items = [item for item in items if not item["is_debug"]]
+        status_counts = {
+            run_status.value: sum(item["status"] == run_status.value for item in items)
+            for run_status in RunStatus
+        }
         return {
             "items": items[offset : offset + limit],
             "total": len(items),
             "offset": offset,
             "limit": limit,
+            "experiments": sorted(
+                {
+                    str(item["experiment"])
+                    for item in items
+                    if item.get("experiment")
+                }
+            ),
+            "counts": status_counts,
+            "debug_count": sum(bool(item["is_debug"]) for item in items),
             "errors": errors,
         }
+
+    @app.delete("/api/runs")
+    def delete_runs(request: DeleteRunsRequest) -> dict[str, object]:
+        return deletion.delete(request.run_ids)
 
     @app.get("/api/runs/{run_id}")
     def get_run(run_id: str) -> dict:
         return repository.get_run(run_id)
+
+    @app.delete("/api/runs/{run_id}")
+    def delete_run(run_id: str) -> dict[str, object]:
+        return deletion.delete([run_id])
 
     @app.get("/api/compare")
     def compare(
@@ -212,6 +279,10 @@ def create_app(
     def enqueue_rerun(run_id: str, request: RerunRequest) -> dict[str, Any]:
         return reruns.enqueue(run_id, request.config)
 
+    @app.post("/api/runs/{run_id}/debug", status_code=202)
+    def start_xor_debug(run_id: str) -> dict[str, Any]:
+        return xor_debug.start(run_id)
+
     @app.get("/api/runs/{run_id}/control")
     def get_run_control(run_id: str) -> dict[str, Any]:
         return controls.state(run_id)
@@ -222,7 +293,17 @@ def create_app(
             run_id,
             request.command,
             delay_ms=request.delay_ms,
+            input_values=request.input_values,
         )
+
+    @app.get("/api/runs/{run_id}/events")
+    def get_events(
+        run_id: str,
+        after_seq: int = Query(default=0, ge=0),
+        limit: int = Query(default=500, ge=1, le=5000),
+    ) -> dict[str, Any]:
+        items = repository.list_events(run_id, after_seq=after_seq, limit=limit)
+        return {"items": items, "last_seq": items[-1]["seq"] if items else after_seq}
 
     @app.get("/api/runs/{run_id}/metrics")
     def get_metrics(run_id: str) -> dict:

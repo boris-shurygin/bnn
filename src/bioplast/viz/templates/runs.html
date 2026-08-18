@@ -33,8 +33,9 @@
       </select>
     </label>
     <label>Эксперимент
-      <input name="experiment" list="experiment-options" placeholder="xor_backprop">
-      <datalist id="experiment-options"></datalist>
+      <select id="experiment-filter" name="experiment">
+        <option value="">Все</option>
+      </select>
     </label>
     <label>Seed
       <input name="seed" type="number" step="1" placeholder="любой">
@@ -45,6 +46,7 @@
     <label>До даты
       <input name="started_before" type="datetime-local">
     </label>
+    <label class="filter-toggle"><input id="show-debug-runs" type="checkbox" checked> Показывать debug</label>
     <div class="filter-actions">
       <button class="button" type="reset">Сбросить</button>
       <button class="button button-primary" type="submit">Применить</button>
@@ -58,14 +60,27 @@
       <h2>Каталог</h2>
       <p id="catalog-caption">Загрузка…</p>
     </div>
-    <label class="toggle"><input id="auto-refresh" type="checkbox" checked> автообновление</label>
+    <div class="catalog-actions">
+      <button id="delete-selected-runs" class="button button-danger" type="button" disabled>Удалить выбранные</button>
+      <label class="toggle"><input id="auto-refresh" type="checkbox" checked> автообновление</label>
+    </div>
   </div>
   <div id="catalog-error" class="notice notice-error hidden" role="alert"></div>
   <div class="table-wrap">
     <table class="runs-table">
-      <thead><tr><th>Запуск</th><th>Статус</th><th>Модель</th><th>Итог</th><th>Начало</th></tr></thead>
-      <tbody id="runs-body"><tr><td colspan="5" class="empty">Читаю runs/…</td></tr></tbody>
+      <thead><tr><th class="selection-cell"><input id="select-page-runs" type="checkbox" aria-label="Выбрать запуски на странице"></th><th>Запуск</th><th>Статус</th><th>Модель</th><th>Итог</th><th>Начало</th><th><span class="visually-hidden">Действия</span></th></tr></thead>
+      <tbody id="runs-body"><tr><td colspan="7" class="empty">Читаю runs/…</td></tr></tbody>
     </table>
+  </div>
+  <div class="pagination" aria-label="Пагинация каталога">
+    <label>На странице
+      <select id="page-size"><option>10</option><option selected>25</option><option>50</option><option>100</option></select>
+    </label>
+    <div class="pagination-actions">
+      <button id="previous-page" class="button" type="button">← Назад</button>
+      <span id="page-indicator">Страница 1 из 1</span>
+      <button id="next-page" class="button" type="button">Вперёд →</button>
+    </div>
   </div>
 </section>
 
@@ -74,4 +89,4 @@
   <ul id="catalog-warning-list" class="warning-list"></ul>
 </section>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', path='/runs.js') }}" defer></script>{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', path='/runs.js') }}?v=20260818-catalog2" defer></script>{% endblock %}

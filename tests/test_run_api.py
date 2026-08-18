@@ -43,6 +43,45 @@ def _legacy_run(
     return run_dir
 
 
+def _contract_run(
+    runs_dir,
+    run_id: str,
+    *,
+    status: RunStatus = RunStatus.COMPLETED,
+    parent_run_id: str | None = None,
+    debug: bool = False,
+    started_at: str = "2026-08-18T12:00:00+03:00",
+):
+    run_dir = runs_dir / run_id
+    run_dir.mkdir(parents=True)
+    config = {
+        "experiment": "xor_interactive" if debug else "xor_backprop",
+        "dataset": "xor",
+        "model": "mlp-2-8-1",
+        "seed": 0,
+    }
+    if debug:
+        config["debug"] = {
+            "protocol": "model_debug_v1",
+            "renderer": "xor_neurons_v1",
+        }
+    (run_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    write_run_manifest(
+        run_dir,
+        RunManifest(
+            run_id=run_id,
+            status=status,
+            experiment=config["experiment"],
+            started_at=started_at,
+            updated_at=started_at,
+            finished_at=started_at if status.terminal else None,
+            duration_sec=1.0 if status.terminal else None,
+            parent_run_id=parent_run_id,
+        ),
+    )
+    return run_dir
+
+
 @pytest.fixture
 def runs_dir(tmp_path):
     root = tmp_path / "runs"
@@ -90,6 +129,46 @@ def test_list_filters_and_paginates(client):
     payload = response.json()
     assert payload["total"] == 1
     assert payload["items"][0]["run_id"] == "20260808-143012-xor-s0"
+
+
+def test_catalog_marks_filters_and_paginates_debug_sessions(tmp_path):
+    runs_dir = tmp_path / "runs"
+    _contract_run(runs_dir, "parent", started_at="2026-08-18T10:00:00+03:00")
+    _contract_run(
+        runs_dir,
+        "debug-child",
+        parent_run_id="parent",
+        debug=True,
+        started_at="2026-08-18T12:00:00+03:00",
+    )
+    _contract_run(runs_dir, "newest", started_at="2026-08-18T13:00:00+03:00")
+    client = TestClient(create_app(runs_dir))
+
+    first = client.get("/api/runs", params={"offset": 0, "limit": 2}).json()
+    hidden = client.get("/api/runs", params={"include_debug": "false"}).json()
+
+    assert first["total"] == 3
+    assert [item["run_id"] for item in first["items"]] == ["newest", "debug-child"]
+    assert first["items"][1]["is_debug"] is True
+    assert first["debug_count"] == 1
+    assert first["counts"]["completed"] == 3
+    assert first["experiments"] == ["xor_backprop", "xor_interactive"]
+    assert hidden["total"] == 2
+    assert all(not item["is_debug"] for item in hidden["items"])
+
+
+def test_run_detail_lists_only_debug_children_and_preserves_parent_link(tmp_path):
+    runs_dir = tmp_path / "runs"
+    _contract_run(runs_dir, "parent")
+    _contract_run(runs_dir, "debug-child", parent_run_id="parent", debug=True)
+    _contract_run(runs_dir, "rerun-child", parent_run_id="parent")
+    client = TestClient(create_app(runs_dir))
+
+    parent = client.get("/api/runs/parent").json()
+    child = client.get("/api/runs/debug-child").json()
+
+    assert [item["run_id"] for item in parent["debug_sessions"]] == ["debug-child"]
+    assert child["manifest"]["parent_run_id"] == "parent"
 
 
 def test_run_card_contains_config_metrics_and_artifacts(client):
@@ -148,6 +227,36 @@ def test_artifact_download_and_missing_run(client):
     assert artifact.status_code == 200
     assert artifact.json()["experiment"] == "xor_backprop"
     assert missing.status_code == 404
+
+
+def test_single_and_batch_deletion_require_terminal_runs_and_complete_family(tmp_path):
+    runs_dir = tmp_path / "runs"
+    _contract_run(runs_dir, "parent")
+    _contract_run(runs_dir, "debug-child", parent_run_id="parent", debug=True)
+    _contract_run(runs_dir, "active", status=RunStatus.RUNNING)
+    _contract_run(runs_dir, "standalone")
+    client = TestClient(create_app(runs_dir))
+
+    active = client.delete("/api/runs/active")
+    parent_only = client.delete("/api/runs/parent")
+    standalone = client.delete("/api/runs/standalone")
+    family = client.request(
+        "DELETE",
+        "/api/runs",
+        json={"run_ids": ["parent", "debug-child"]},
+    )
+
+    assert active.status_code == 409
+    assert "сначала завершите" in active.json()["detail"]
+    assert parent_only.status_code == 409
+    assert "debug-child" in parent_only.json()["detail"]
+    assert standalone.status_code == 200
+    assert standalone.json()["deleted"] == ["standalone"]
+    assert family.status_code == 200
+    assert family.json()["count"] == 2
+    assert not (runs_dir / "parent").exists()
+    assert not (runs_dir / "debug-child").exists()
+    assert (runs_dir / "active").is_dir()
 
 
 def test_repository_rejects_run_and_artifact_traversal(runs_dir, tmp_path):

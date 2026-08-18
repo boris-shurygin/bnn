@@ -170,6 +170,17 @@ def test_events_round_trip_as_json_lines(tmp_path):
     assert (run_dir / "events.jsonl").read_text(encoding="utf-8").count("\n") == 2
 
 
+def test_event_reader_ignores_partial_live_tail(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    event = RunEvent("run", 1, "2026-08-15T12:00:00+03:00", "snapshot")
+    append_event(run_dir, event)
+    with (run_dir / "events.jsonl").open("a", encoding="utf-8") as stream:
+        stream.write('{"incomplete":')
+
+    assert list(iter_events(run_dir)) == [event]
+
+
 def test_contract_rejects_unknown_version(tmp_path):
     run_dir = tmp_path / "run"
     run_dir.mkdir()

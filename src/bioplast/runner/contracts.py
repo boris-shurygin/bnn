@@ -531,24 +531,27 @@ def iter_events(run_dir: Path) -> Iterator[RunEvent]:
     if not path.exists():
         return
     previous_seq = -1
-    with path.open(encoding="utf-8") as stream:
-        for line_number, line in enumerate(stream, start=1):
-            if not line.strip():
-                continue
-            try:
-                event = RunEvent.from_dict(json.loads(line))
-                if event.run_id != run_dir.name:
-                    raise ContractError(
-                        f"run_id события {event.run_id!r} не совпадает с {run_dir.name!r}"
-                    )
-                if event.seq <= previous_seq:
-                    raise ContractError(
-                        f"seq должен возрастать: {event.seq} после {previous_seq}"
-                    )
-                previous_seq = event.seq
-                yield event
-            except (json.JSONDecodeError, TypeError, ValueError) as exc:
-                raise ContractError(f"некорректное событие {path}:{line_number}: {exc}") from exc
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    if text and not text.endswith("\n"):
+        lines = lines[:-1]
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            event = RunEvent.from_dict(json.loads(line))
+            if event.run_id != run_dir.name:
+                raise ContractError(
+                    f"run_id события {event.run_id!r} не совпадает с {run_dir.name!r}"
+                )
+            if event.seq <= previous_seq:
+                raise ContractError(
+                    f"seq должен возрастать: {event.seq} после {previous_seq}"
+                )
+            previous_seq = event.seq
+            yield event
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise ContractError(f"некорректное событие {path}:{line_number}: {exc}") from exc
 
 
 def _adapt_legacy_run(run_dir: Path) -> RunManifest:

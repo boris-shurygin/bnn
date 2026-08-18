@@ -13,6 +13,7 @@
   </div>
   <div class="page-actions">
     <a id="compare-run-link" class="button" href="/compare">Сравнить</a>
+    <button id="delete-run" class="button button-danger hidden" type="button">Удалить</button>
     <span id="run-status" class="status status-loading">загрузка</span>
   </div>
 </section>
@@ -22,9 +23,17 @@
 <div id="dirty-notice" class="notice notice-warning hidden"></div>
 <div id="parent-notice" class="notice notice-info hidden"></div>
 
+<section id="debug-sessions-panel" class="panel debug-sessions-panel hidden" aria-labelledby="debug-sessions-heading">
+  <div class="panel-heading">
+    <div><h2 id="debug-sessions-heading">Отладочные сессии</h2><p>Сессии, созданные из checkpoint этого запуска.</p></div>
+    <span id="debug-sessions-count" class="mono-label"></span>
+  </div>
+  <ul id="debug-sessions-list" class="child-run-list"></ul>
+</section>
+
 <section id="final-metrics" class="stats-grid detail-stats" aria-label="Итоговые метрики"></section>
 
-<section class="panel control-panel" aria-labelledby="control-heading">
+<section id="control-panel" class="panel control-panel hidden" aria-labelledby="control-heading">
   <div class="panel-heading">
     <div>
       <h2 id="control-heading">Управление запуском</h2>
@@ -38,7 +47,7 @@
       <div class="control-actions" aria-label="Команды запуска">
         <button class="button" type="button" data-run-command="pause">Пауза</button>
         <button class="button" type="button" data-run-command="resume">Продолжить</button>
-        <button class="button button-primary" type="button" data-run-command="step">Один шаг</button>
+        <button class="button button-primary" type="button" data-run-command="step" data-debug-step>Один шаг</button>
         <button class="button button-danger" type="button" data-run-command="cancel">Отменить</button>
       </div>
       <form id="delay-form" class="delay-control">
@@ -50,6 +59,44 @@
       </form>
     </div>
     <div id="control-error" class="notice notice-error hidden" role="alert"></div>
+  </div>
+</section>
+
+<section id="xor-debug-panel" class="panel xor-debug-panel hidden" aria-labelledby="xor-debug-heading">
+  <div class="panel-heading">
+    <div>
+      <h2 id="xor-debug-heading">Интерактивный XOR</h2>
+      <p>Ручной вход и послойный forward через worker-процесс.</p>
+    </div>
+    <span class="mono-label">events.jsonl + snapshots</span>
+  </div>
+  <div class="xor-debug-body">
+    <div id="xor-debug-launch" class="hidden">
+      <p>Создайте дочернюю отладочную сессию: исходный checkpoint и результаты останутся неизменными.</p>
+      <button id="start-xor-debug" class="button button-primary" type="button">Открыть отладочную сессию</button>
+    </div>
+    <div id="xor-debug-session" class="hidden">
+      <form id="xor-input-form" class="xor-input-form">
+        <fieldset class="xor-presets">
+          <legend>Точки XOR</legend>
+          <button class="button" type="button" data-xor-input="0,0">0, 0</button>
+          <button class="button" type="button" data-xor-input="0,1">0, 1</button>
+          <button class="button" type="button" data-xor-input="1,0">1, 0</button>
+          <button class="button" type="button" data-xor-input="1,1">1, 1</button>
+        </fieldset>
+        <label>Вход x₀<input id="xor-x0" type="number" step="any" value="0"></label>
+        <label>Вход x₁<input id="xor-x1" type="number" step="any" value="1"></label>
+        <button id="xor-set-input" class="button button-primary" type="submit">Подать вход</button>
+      </form>
+      <div id="xor-debug-message" class="notice notice-info">Подайте вход для обычного forward. Для послойного режима сначала нажмите «Пауза».</div>
+      <div class="xor-forward-view">
+        <div id="xor-forward-meta" class="xor-forward-meta">Snapshot ещё не создан.</div>
+        <div class="xor-network-scroll">
+          <svg id="xor-network" class="xor-network" role="img" aria-label="Схема нейронов и связей XOR"></svg>
+        </div>
+      </div>
+    </div>
+    <div id="xor-debug-error" class="notice notice-error hidden" role="alert"></div>
   </div>
 </section>
 

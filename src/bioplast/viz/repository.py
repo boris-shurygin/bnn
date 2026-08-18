@@ -1,15 +1,22 @@
-"""Read-only доступ к каталогу `runs/` для API визуализатора."""
+"""Доступ к каталогу `runs/` для API визуализатора."""
 
 from __future__ import annotations
 
 import json
 import mimetypes
+import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-from bioplast.runner.contracts import ContractError, RunManifest, RunStatus, load_run_manifest
+from bioplast.runner.contracts import (
+    ContractError,
+    RunManifest,
+    RunStatus,
+    iter_events,
+    load_run_manifest,
+)
 
 
 class RunNotFound(LookupError):
@@ -41,7 +48,7 @@ class ArtifactInfo:
 
 
 class RunRepository:
-    """Нормализует новые и legacy-прогоны, не изменяя файлов на диске."""
+    """Нормализует новые и legacy-прогоны и ограничивает доступ каталогом runs/."""
 
     def __init__(self, runs_dir: Path | str) -> None:
         self.runs_dir = Path(runs_dir).resolve()
@@ -97,12 +104,51 @@ class RunRepository:
             "config": config,
             "metrics": metrics,
             "artifacts": [item.to_dict() for item in self.list_artifacts(run_id)],
+            "debug_sessions": self.list_debug_sessions(run_id),
         }
+
+    def get_manifest(self, run_id: str) -> RunManifest:
+        """Прочитать фактический или нормализованный legacy-манифест запуска."""
+        return self._load_manifest(self.resolve_run(run_id))
+
+    def list_debug_sessions(self, parent_run_id: str) -> list[dict[str, Any]]:
+        """Вернуть debug-сессии, непосредственно созданные от запуска."""
+        self.resolve_run(parent_run_id)
+        items, _errors = self.list_runs()
+        return [
+            item
+            for item in items
+            if item["parent_run_id"] == parent_run_id and item["is_debug"]
+        ]
+
+    def delete_run(self, run_id: str) -> None:
+        """Удалить один заранее проверенный каталог, не выходя за границу runs/."""
+        run_dir = self.resolve_run(run_id)
+        shutil.rmtree(run_dir)
 
     def get_metrics(self, run_id: str) -> dict[str, Any]:
         run_dir = self.resolve_run(run_id)
         manifest = self._load_manifest(run_dir)
         return self._read_metrics(run_dir, manifest, required=True)
+
+    def list_events(
+        self,
+        run_id: str,
+        *,
+        after_seq: int = 0,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        if after_seq < 0:
+            raise ValueError("after_seq не может быть отрицательным")
+        if limit < 1 or limit > 5000:
+            raise ValueError("limit должен быть от 1 до 5000")
+        run_dir = self.resolve_run(run_id)
+        self._load_manifest(run_dir)
+        return [
+            event.to_dict()
+            for event in iter_events(run_dir)
+            if event.seq > after_seq
+        ][:limit]
 
     def read_log(self, run_id: str, *, offset: int = 0, limit: int = 65_536) -> dict[str, Any]:
         if offset < 0:
@@ -247,10 +293,18 @@ class RunRepository:
             "finished_at": manifest.finished_at,
             "duration_sec": manifest.duration_sec,
             "parent_run_id": manifest.parent_run_id,
+            "is_debug": _is_debug_config(config),
             "adapted_from_legacy": manifest.adapted_from_legacy,
             "dirty": bool(git.get("dirty", False)),
             "final": final,
         }
+
+
+def _is_debug_config(config: dict[str, Any]) -> bool:
+    debug = config.get("debug")
+    if isinstance(debug, dict) and debug.get("protocol") == "model_debug_v1":
+        return True
+    return config.get("experiment") == "xor_interactive"
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:

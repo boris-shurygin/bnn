@@ -49,6 +49,15 @@ def test_catalog_page_loads_local_styles_and_script(tmp_path):
     assert "Экспериментальный журнал" in page.text
     assert "/static/app.css" in page.text and "/static/runs.js" in page.text
     assert "fetch(`/api/runs?" in script.text
+    assert 'id="show-debug-runs"' in page.text
+    assert 'id="experiment-filter"' in page.text
+    assert "datalist" not in page.text
+    assert 'id="select-page-runs"' in page.text
+    assert 'id="page-indicator"' in page.text
+    assert "debug-badge" in script.text
+    assert 'method: "DELETE"' in script.text
+    assert 'params.set("offset"' in script.text
+    assert "knownExperiments" in script.text
 
 
 def test_detail_page_uses_local_plotly_and_live_log_script(tmp_path):
@@ -68,6 +77,10 @@ def test_detail_page_uses_local_plotly_and_live_log_script(tmp_path):
     assert 'dragmode: "pan"' in script.text
     assert "Скролл двигает страницу" not in script.text
     assert "Zoom / pan активны" not in script.text
+    assert 'id="debug-sessions-panel"' in page.text
+    assert 'id="delete-run"' in page.text
+    assert "renderDebugSessions" in script.text
+    assert "Отладочная сессия модели из" in script.text
 
 
 def test_detail_page_contains_rerun_form_and_live_diff(tmp_path):
@@ -90,11 +103,15 @@ def test_detail_page_contains_cooperative_run_controls(tmp_path):
     css = client.get("/static/app.css")
 
     assert "Управление запуском" in page.text
+    assert 'id="control-panel"' in page.text
     assert 'data-run-command="pause"' in page.text
-    assert 'data-run-command="step"' in page.text
+    assert 'data-run-command="step" data-debug-step' in page.text
     assert 'id="delay-ms"' in page.text
     assert f"/api/runs/${{encodedRunId}}/control" in script.text
     assert "issueControl" in script.text
+    assert "setupRunControl" in script.text
+    assert "debugCapabilities" in script.text
+    assert 'renderer !== "xor_neurons_v1"' in script.text
     assert ".control-actions" in css.text
 
 
@@ -117,10 +134,32 @@ def test_detail_page_contains_model_graph_layer_and_tensor_views(tmp_path):
     assert "weight ${formatShape(weight.shape)}" in script.text
     assert "/artifacts/${encodedPath}" in script.text
     assert "Это нормальное состояние для старых прогонов" in script.text
-    assert "checkpoint.pt" not in script.text
+    assert "torch.load" not in script.text
     assert ".model-node-selected" in css.text
     assert ".tensor-values-table" in css.text
     assert ".tensor-heatmap-cell" in css.text
+
+
+def test_detail_page_contains_interactive_xor_controls_and_neuron_graph(tmp_path):
+    client, run_id = _client(tmp_path)
+
+    page = client.get(f"/runs/{run_id}")
+    script = client.get("/static/run-detail.js")
+    css = client.get("/static/app.css")
+
+    assert "Интерактивный XOR" in page.text
+    assert 'id="start-xor-debug"' in page.text
+    assert 'data-xor-input="0,1"' in page.text
+    assert 'id="xor-network"' in page.text
+    assert f"/api/runs/${{encodedRunId}}/debug" in script.text
+    assert 'issueControl("set_input"' in script.text
+    assert 'submit.textContent = xorInputLoading ? "Подаём вход…" : "Подать вход"' in script.text
+    assert "controlRevision" in script.text
+    assert "xorForwardPending" in script.text
+    assert "finally" in script.text
+    assert "renderXorNetwork" in script.text
+    assert "/events?after_seq=" in script.text
+    assert ".xor-neuron-active" in css.text
 
 
 def test_comparison_page_uses_local_plotly_and_comparison_api(tmp_path):

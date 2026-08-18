@@ -12,19 +12,48 @@ let detailSignature = "";
 let logOffset = 0;
 let logLoading = false;
 let logMissing = false;
-let controlLoading = false;
+let controlPollLoading = false;
+let controlCommandLoading = false;
+let controlRevision = 0;
+let currentControl = null;
 let rerunPreview = null;
 const rerunInputs = new Map();
 let modelSignature = "";
 let modelLoadToken = 0;
 let selectedLayerId = null;
 const selectedTensorByLayer = new Map();
+let xorEventSeq = 0;
+let xorSnapshot = null;
+let xorSnapshotLoading = false;
+let xorCanSetInput = false;
+let xorInputLoading = false;
+
+function debugCapabilities(config) {
+  if (config?.debug && typeof config.debug === "object" && !Array.isArray(config.debug)) {
+    return config.debug;
+  }
+  // Совместимость с debug-сессиями, созданными до появления явных capabilities.
+  return config?.experiment === "xor_interactive"
+    ? {
+      protocol: "model_debug_v1", renderer: "xor_neurons_v1",
+      accepts_input: true, input_size: 2, supports_step: true, step_scope: "layer",
+    }
+    : null;
+}
+
+function isDebugSession(config) {
+  return debugCapabilities(config)?.protocol === "model_debug_v1";
+}
 
 function node(tag, className, text) {
   const value = document.createElement(tag);
   if (className) value.className = className;
   if (text !== undefined) value.textContent = text;
   return value;
+}
+
+function statusBadge(status) {
+  return node("span", `status status-${status}`, statusNames[status] || status);
 }
 
 function formatValue(value) {
@@ -79,6 +108,9 @@ function renderHeader(manifest, config, metrics) {
   const status = document.querySelector("#run-status");
   status.className = `status status-${manifest.status}`;
   status.textContent = statusNames[manifest.status] || manifest.status;
+  document.querySelector("#delete-run").classList.toggle(
+    "hidden", !terminalStatuses.has(manifest.status),
+  );
   const meta = [
     config.dataset, config.model || config.name,
     `seed ${config.seed ?? "—"}`, formatDate(manifest.started_at),
@@ -97,7 +129,8 @@ function renderHeader(manifest, config, metrics) {
   parentNotice.replaceChildren();
   parentNotice.classList.toggle("hidden", !manifest.parent_run_id);
   if (manifest.parent_run_id) {
-    parentNotice.append("Повторный запуск от ");
+    parentNotice.append(isDebugSession(config)
+      ? "Отладочная сессия модели из " : "Повторный запуск от ");
     const parentLink = node("a", "run-link", manifest.parent_run_id);
     parentLink.href = `/runs/${encodeURIComponent(manifest.parent_run_id)}`;
     parentNotice.append(parentLink);
@@ -107,12 +140,34 @@ function renderHeader(manifest, config, metrics) {
   if (manifest.parent_run_id) {
     compareParams.set("baseline", manifest.parent_run_id);
     compareParams.append("candidate", manifest.run_id);
-    compareLink.textContent = "Сравнить с родителем";
+    compareLink.textContent = isDebugSession(config)
+      ? "Сравнить с исходным" : "Сравнить с родителем";
   } else {
     compareParams.set("baseline", manifest.run_id);
     compareLink.textContent = "Добавить к сравнению";
   }
   compareLink.href = `/compare?${compareParams}`;
+}
+
+function renderDebugSessions(items) {
+  const panel = document.querySelector("#debug-sessions-panel");
+  const list = document.querySelector("#debug-sessions-list");
+  list.replaceChildren();
+  panel.classList.toggle("hidden", !items.length);
+  document.querySelector("#debug-sessions-count").textContent = items.length
+    ? `${items.length} шт.` : "";
+  for (const run of items) {
+    const item = node("li");
+    const identity = node("div");
+    const link = node("a", "run-link", run.run_id);
+    link.href = `/runs/${encodeURIComponent(run.run_id)}`;
+    identity.append(link, node("span", "debug-badge", "debug"));
+    identity.append(node("div", "cell-sub", [run.experiment, run.model].filter(Boolean).join(" · ")));
+    const meta = node("div", "child-run-meta");
+    meta.append(statusBadge(run.status), node("span", "", formatDate(run.started_at)));
+    item.append(identity, meta);
+    list.append(item);
+  }
 }
 
 function renderFinal(values) {
@@ -278,6 +333,219 @@ function modelNode(layer) {
 }
 
 let currentModel = null;
+
+function modelWeight(layerId) {
+  const layer = currentModel?.layers.find(item => item.id === layerId);
+  const weight = layer?.tensors?.find(item => item.name === "weight");
+  return weight?.value_mode === "full" && Array.isArray(weight.values) ? weight.values : null;
+}
+
+function validateXorSnapshot(payload) {
+  if (!payload || payload.schema_version !== 1 || payload.kind !== "xor_forward_snapshot") {
+    throw new Error("Поддерживается только xor_forward_snapshot версии 1.");
+  }
+  if (payload.run_id !== runId) throw new Error("Snapshot принадлежит другому запуску.");
+  if (!Array.isArray(payload.input) || payload.input.length !== 2) {
+    throw new Error("XOR snapshot должен содержать два входа.");
+  }
+  if (!["input", "forward_hidden", "forward_output"].includes(payload.phase)) {
+    throw new Error(`Неизвестная фаза snapshot: ${payload.phase || "—"}`);
+  }
+}
+
+function svgNode(tag, attributes = {}) {
+  const value = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  Object.entries(attributes).forEach(([key, item]) => value.setAttribute(key, String(item)));
+  return value;
+}
+
+function activationColor(value, available) {
+  if (!available) return "#132635";
+  const strength = Math.min(1, Math.abs(Number(value) || 0));
+  return value < 0
+    ? `rgba(255,117,129,${0.2 + strength * 0.75})`
+    : `rgba(80,214,208,${0.2 + strength * 0.75})`;
+}
+
+function addXorNeuron(svg, { x, y, value, available, label, active }) {
+  const group = svgNode("g", { class: active ? "xor-neuron xor-neuron-active" : "xor-neuron" });
+  const circle = svgNode("circle", {
+    cx: x, cy: y, r: 21,
+    fill: activationColor(value, available),
+  });
+  const title = svgNode("title");
+  title.textContent = available ? `${label}: ${formatValue(value)}` : `${label}: ещё не вычислен`;
+  circle.append(title);
+  const text = svgNode("text", { x, y: y + 4, "text-anchor": "middle" });
+  text.textContent = available ? formatValue(value) : "·";
+  const name = svgNode("text", { x, y: y + 38, "text-anchor": "middle", class: "xor-neuron-label" });
+  name.textContent = label;
+  group.append(circle, text, name);
+  svg.append(group);
+}
+
+function addXorEdges(svg, sourceX, targetX, sourceYs, targetYs, sourceValues, weights) {
+  if (!Array.isArray(weights)) return;
+  const entries = [];
+  targetYs.forEach((targetY, targetIndex) => {
+    sourceYs.forEach((sourceY, sourceIndex) => {
+      const weight = Number(weights[targetIndex]?.[sourceIndex]);
+      const source = Number(sourceValues?.[sourceIndex]);
+      if (!Number.isFinite(weight)) return;
+      const contribution = Number.isFinite(source) ? weight * source : 0;
+      entries.push({ sourceY, targetY, weight, contribution });
+    });
+  });
+  const maximum = Math.max(...entries.map(item => Math.abs(item.contribution)), 0);
+  for (const item of entries) {
+    const strength = maximum > 0 ? Math.abs(item.contribution) / maximum : 0;
+    const line = svgNode("line", {
+      x1: sourceX + 23,
+      y1: item.sourceY,
+      x2: targetX - 23,
+      y2: item.targetY,
+      stroke: item.contribution < 0 ? "#ff7581" : "#50d6d0",
+      "stroke-width": 1 + 3 * strength,
+      "stroke-opacity": maximum > 0 ? 0.13 + 0.82 * strength : 0.12,
+    });
+    const title = svgNode("title");
+    title.textContent = `weight ${formatValue(item.weight)} · activation ${formatValue(item.contribution / (item.weight || 1))} = ${formatValue(item.contribution)}`;
+    line.append(title);
+    svg.append(line);
+  }
+}
+
+function renderXorNetwork() {
+  const svg = document.querySelector("#xor-network");
+  if (!svg || debugCapabilities(detail?.config)?.renderer !== "xor_neurons_v1") return;
+  svg.replaceChildren();
+  const hiddenWeights = modelWeight("hidden");
+  const outputWeights = modelWeight("output");
+  if (!hiddenWeights || !outputWeights) {
+    svg.setAttribute("viewBox", "0 0 760 180");
+    const message = svgNode("text", { x: 380, y: 92, "text-anchor": "middle", class: "xor-empty" });
+    message.textContent = "Для схемы нужны полные малые веса model.json";
+    svg.append(message);
+    return;
+  }
+
+  const hiddenCount = hiddenWeights.length;
+  const height = Math.max(320, hiddenCount * 62 + 80);
+  const inputX = 90;
+  const hiddenX = 380;
+  const outputX = 670;
+  const spread = (count, spacing) => Array.from({ length: count }, (_, index) =>
+    height / 2 + (index - (count - 1) / 2) * spacing);
+  const inputYs = spread(2, 92);
+  const hiddenYs = spread(hiddenCount, Math.min(62, (height - 70) / Math.max(1, hiddenCount - 1)));
+  const outputYs = [height / 2];
+  svg.setAttribute("viewBox", `0 0 760 ${height}`);
+
+  const inputValues = xorSnapshot?.input || [null, null];
+  const hiddenValues = xorSnapshot?.hidden || [];
+  const outputValues = xorSnapshot?.phase === "forward_output" ? xorSnapshot.post : [];
+  addXorEdges(svg, inputX, hiddenX, inputYs, hiddenYs, inputValues, hiddenWeights);
+  addXorEdges(svg, hiddenX, outputX, hiddenYs, outputYs, hiddenValues, outputWeights);
+
+  inputYs.forEach((y, index) => addXorNeuron(svg, {
+    x: inputX, y, value: inputValues[index], available: inputValues[index] != null,
+    label: `x${index}`, active: xorSnapshot?.phase === "input",
+  }));
+  hiddenYs.forEach((y, index) => addXorNeuron(svg, {
+    x: hiddenX, y, value: hiddenValues[index], available: hiddenValues[index] != null,
+    label: `h${index}`, active: xorSnapshot?.phase === "forward_hidden",
+  }));
+  addXorNeuron(svg, {
+    x: outputX, y: outputYs[0], value: outputValues[0], available: outputValues[0] != null,
+    label: "P(XOR=1)", active: xorSnapshot?.phase === "forward_output",
+  });
+
+  for (const [x, label] of [[inputX, "Вход"], [hiddenX, "ReLU"], [outputX, "Sigmoid"]]) {
+    const heading = svgNode("text", { x, y: 24, "text-anchor": "middle", class: "xor-column-label" });
+    heading.textContent = label;
+    svg.append(heading);
+  }
+}
+
+function renderXorSnapshot(snapshot) {
+  xorSnapshot = snapshot;
+  const phaseNames = {
+    input: "вход принят",
+    forward_hidden: "вычислен скрытый слой",
+    forward_output: "вычислен выход",
+  };
+  const result = snapshot.phase === "forward_output"
+    ? ` · P(1)=${formatValue(snapshot.probability)} · класс ${snapshot.prediction}`
+    : "";
+  document.querySelector("#xor-forward-meta").textContent =
+    `snapshot #${snapshot.seq} · ${phaseNames[snapshot.phase]} · вход [${snapshot.input.map(formatValue).join(", ")}]${result}`;
+  const paused = currentControl?.requested_status === "paused";
+  showNotice("#xor-debug-message", snapshot.phase === "input"
+    ? paused
+      ? "Вход принят. Нажмите «Один шаг», чтобы вычислить скрытый слой."
+      : "Вход принят. Вычисляем скрытый слой…"
+    : snapshot.phase === "forward_hidden"
+      ? paused
+        ? "Скрытый слой вычислен. Ещё один шаг вычислит выход."
+        : "Скрытый слой вычислен. Вычисляем выход…"
+      : `Forward завершён: модель предсказывает ${snapshot.prediction}. Подайте следующий вход.`);
+  renderXorNetwork();
+  renderXorInputControls();
+}
+
+async function loadXorEvents() {
+  if (xorSnapshotLoading || debugCapabilities(detail?.config)?.renderer !== "xor_neurons_v1") return;
+  xorSnapshotLoading = true;
+  try {
+    const response = await fetch(`/api/runs/${encodedRunId}/events?after_seq=${xorEventSeq}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || `API ответил ${response.status}`);
+    const nextEventSeq = payload.last_seq ?? xorEventSeq;
+    const event = [...(payload.items || [])].reverse().find(item => item.type === "xor_forward" && item.snapshot);
+    if (event) {
+      const encodedPath = event.snapshot.split("/").map(encodeURIComponent).join("/");
+      const snapshotResponse = await fetch(`/api/runs/${encodedRunId}/artifacts/${encodedPath}`, { cache: "no-store" });
+      const snapshot = await snapshotResponse.json();
+      if (!snapshotResponse.ok) throw new Error(snapshot.detail || `API ответил ${snapshotResponse.status}`);
+      validateXorSnapshot(snapshot);
+      renderXorSnapshot(snapshot);
+    }
+    xorEventSeq = nextEventSeq;
+    showNotice("#xor-debug-error", "");
+  } catch (error) {
+    showNotice("#xor-debug-error", `Не удалось прочитать XOR snapshot: ${error.message}`);
+  } finally {
+    xorSnapshotLoading = false;
+  }
+}
+
+function setupXorDebug(payload) {
+  const panel = document.querySelector("#xor-debug-panel");
+  const launch = document.querySelector("#xor-debug-launch");
+  const session = document.querySelector("#xor-debug-session");
+  const isXorRenderer = debugCapabilities(payload.config)?.renderer === "xor_neurons_v1";
+  const artifactPaths = new Set((payload.artifacts || []).map(item => item.path));
+  const canStart = payload.config.experiment === "xor_backprop"
+    && payload.manifest.status === "completed"
+    && artifactPaths.has("model.json")
+    && artifactPaths.has("checkpoint.pt");
+  panel.classList.toggle("hidden", !isXorRenderer && !canStart);
+  launch.classList.toggle("hidden", !canStart || isXorRenderer);
+  session.classList.toggle("hidden", !isXorRenderer);
+  if (isXorRenderer) {
+    renderXorNetwork();
+    loadXorEvents();
+  }
+}
+
+function setupRunControl(payload) {
+  const isTerminal = terminalStatuses.has(payload.manifest.status);
+  const supportsStep = debugCapabilities(payload.config)?.supports_step === true;
+  document.querySelector("#control-panel").classList.toggle("hidden", isTerminal);
+  document.querySelectorAll("[data-debug-step]").forEach(element => {
+    element.classList.toggle("hidden", !supportsStep);
+  });
+}
 
 function renderModelFacts(model, config) {
   const facts = document.querySelector("#model-facts");
@@ -527,6 +795,7 @@ function renderModel(model, config) {
   renderModelFacts(model, config);
   renderModelGraph(model);
   renderSelectedLayer(model);
+  renderXorNetwork();
 }
 
 async function loadModel(payload) {
@@ -583,6 +852,7 @@ function renderArtifacts(items) {
 function renderDetail(payload) {
   detail = payload;
   renderHeader(payload.manifest, payload.config, payload.metrics);
+  renderDebugSessions(payload.debug_sessions || []);
   renderFinal(payload.metrics.final || {});
   renderKeyValues("#config-table", payload.config);
   renderKeyValues("#env-table", payload.metrics.env || {});
@@ -590,6 +860,8 @@ function renderDetail(payload) {
   renderCharts(payload.metrics);
   renderArtifacts(payload.artifacts || []);
   loadModel(payload);
+  setupRunControl(payload);
+  setupXorDebug(payload);
   const logPath = payload.manifest.artifacts.log || "run.log";
   const encodedLogPath = logPath.split("/").map(encodeURIComponent).join("/");
   document.querySelector("#download-log").href = `/api/runs/${encodedRunId}/artifacts/${encodedLogPath}`;
@@ -606,12 +878,34 @@ async function fetchDetail() {
   }
 }
 
+function xorForwardPending() {
+  const inputSeq = currentControl?.input_seq || 0;
+  if (!inputSeq) return false;
+  return !xorSnapshot
+    || xorSnapshot.input_command_seq < inputSeq
+    || (xorSnapshot.input_command_seq === inputSeq && xorSnapshot.phase !== "forward_output");
+}
+
+function renderXorInputControls() {
+  const busy = xorInputLoading || controlCommandLoading || xorForwardPending();
+  const submit = document.querySelector("#xor-set-input");
+  submit.disabled = busy || !xorCanSetInput;
+  submit.textContent = xorInputLoading ? "Подаём вход…" : "Подать вход";
+  submit.setAttribute("aria-busy", xorInputLoading ? "true" : "false");
+  document.querySelectorAll("[data-xor-input]").forEach(button => {
+    button.disabled = busy || !xorCanSetInput;
+  });
+}
+
 function renderControl(control) {
+  currentControl = control;
   const available = new Set(control.available_commands || []);
   document.querySelectorAll("[data-run-command]").forEach(button => {
-    button.disabled = !available.has(button.dataset.runCommand);
+    button.disabled = controlCommandLoading || !available.has(button.dataset.runCommand);
   });
   const delay = document.querySelector("#delay-ms");
+  xorCanSetInput = available.has("set_input");
+  renderXorInputControls();
   if (document.activeElement !== delay) delay.value = String(control.delay_ms ?? 0);
   const actual = statusNames[control.status] || control.status;
   const requested = statusNames[control.requested_status] || control.requested_status;
@@ -622,27 +916,33 @@ function renderControl(control) {
 }
 
 async function loadControl() {
-  if (controlLoading) return;
-  controlLoading = true;
+  if (controlPollLoading || controlCommandLoading) return;
+  controlPollLoading = true;
+  const revision = controlRevision;
   try {
     const response = await fetch(`/api/runs/${encodedRunId}/control`, { cache: "no-store" });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || `API ответил ${response.status}`);
-    renderControl(payload);
-    showNotice("#control-error", "");
+    if (revision === controlRevision) {
+      renderControl(payload);
+      showNotice("#control-error", "");
+    }
   } catch (error) {
     showNotice("#control-error", `Не удалось прочитать управление: ${error.message}`);
   } finally {
-    controlLoading = false;
+    controlPollLoading = false;
   }
 }
 
-async function issueControl(command, delayMs = null) {
-  if (controlLoading) return;
-  controlLoading = true;
-  document.querySelectorAll("[data-run-command]").forEach(button => { button.disabled = true; });
+async function issueControl(command, delayMs = null, inputValues = null) {
+  if (controlCommandLoading) return false;
+  controlCommandLoading = true;
+  controlRevision += 1;
+  if (currentControl) renderControl(currentControl);
   const body = { command };
   if (delayMs !== null) body.delay_ms = delayMs;
+  if (inputValues !== null) body.input_values = inputValues;
+  let succeeded = false;
   try {
     const response = await fetch(`/api/runs/${encodedRunId}/control`, {
       method: "POST",
@@ -654,13 +954,62 @@ async function issueControl(command, delayMs = null) {
     renderControl(payload.control);
     showNotice("#control-error", "");
     fetchDetail();
+    succeeded = true;
   } catch (error) {
     showNotice("#control-error", error.message);
-    controlLoading = false;
-    await loadControl();
+  } finally {
+    controlCommandLoading = false;
+    if (currentControl) renderControl(currentControl);
+  }
+  if (!succeeded) loadControl();
+  return succeeded;
+}
+
+async function startXorDebug() {
+  const button = document.querySelector("#start-xor-debug");
+  button.disabled = true;
+  button.textContent = "Создаём сессию…";
+  try {
+    const response = await fetch(`/api/runs/${encodedRunId}/debug`, { method: "POST" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || `API ответил ${response.status}`);
+    window.location.assign(payload.location);
+  } catch (error) {
+    showNotice("#xor-debug-error", error.message);
+    button.disabled = false;
+    button.textContent = "Открыть отладочную сессию";
+  }
+}
+
+async function submitXorInput() {
+  const values = ["#xor-x0", "#xor-x1"].map(selector => Number(document.querySelector(selector).value));
+  if (values.some(value => !Number.isFinite(value))) {
+    showNotice("#xor-debug-error", "Оба входа XOR должны быть конечными числами.");
     return;
   }
-  controlLoading = false;
+  if (!xorCanSetInput) {
+    showNotice("#xor-debug-error", "Ввод сейчас недоступен: сессия завершена или отменяется.");
+    return;
+  }
+  if (xorForwardPending()) {
+    showNotice("#xor-debug-error", "Сначала завершите текущий forward: «Продолжить» или «Один шаг».");
+    return;
+  }
+  if (xorInputLoading) return;
+  xorInputLoading = true;
+  renderXorInputControls();
+  try {
+    if (await issueControl("set_input", null, values)) {
+      showNotice("#xor-debug-error", "");
+      showNotice("#xor-debug-message", currentControl?.requested_status === "paused"
+        ? "Вход передан. Нажмите «Один шаг» для вычисления скрытого слоя."
+        : "Вход передан. Запускаем forward…");
+      await loadXorEvents();
+    }
+  } finally {
+    xorInputLoading = false;
+    renderXorInputControls();
+  }
 }
 
 async function pollLog(reset = false) {
@@ -810,8 +1159,37 @@ async function loadRerunPreview() {
   }
 }
 
+document.querySelector("#start-xor-debug").addEventListener("click", startXorDebug);
+document.querySelector("#xor-input-form").addEventListener("submit", event => {
+  event.preventDefault();
+  submitXorInput();
+});
+document.querySelectorAll("[data-xor-input]").forEach(button => {
+  button.addEventListener("click", () => {
+    const [x0, x1] = button.dataset.xorInput.split(",");
+    document.querySelector("#xor-x0").value = x0;
+    document.querySelector("#xor-x1").value = x1;
+    submitXorInput();
+  });
+});
 document.querySelector("#rerun-reset").addEventListener("click", () => {
   if (rerunPreview) renderRerunForm(rerunPreview);
+});
+document.querySelector("#delete-run").addEventListener("click", async event => {
+  if (!window.confirm(`Удалить запуск ${runId} без возможности восстановления?`)) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = "Удаляем…";
+  try {
+    const response = await fetch(`/api/runs/${encodedRunId}`, { method: "DELETE" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.detail || `API ответил ${response.status}`);
+    window.location.assign("/runs");
+  } catch (error) {
+    showNotice("#page-error", `Не удалось удалить запуск: ${error.message}`);
+    button.disabled = false;
+    button.textContent = "Удалить";
+  }
 });
 document.querySelectorAll("[data-run-command]:not([data-run-command='set_delay'])").forEach(button => {
   button.addEventListener("click", () => {
@@ -873,6 +1251,7 @@ setInterval(() => {
 setInterval(() => {
   if (!detail || !terminalStatuses.has(detail.manifest.status)) loadControl();
 }, 1000);
+setInterval(loadXorEvents, 500);
 fetchDetail();
 loadControl();
 pollLog(true);

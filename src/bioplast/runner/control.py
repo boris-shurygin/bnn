@@ -9,6 +9,7 @@ API дописывает команды в ``commands.jsonl``. Worker переч
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from dataclasses import dataclass, replace
@@ -36,6 +37,7 @@ class RunCommandType(StrEnum):
     RESUME = "resume"
     STEP = "step"
     SET_DELAY = "set_delay"
+    SET_INPUT = "set_input"
     CANCEL = "cancel"
 
 
@@ -46,6 +48,7 @@ class RunCommand:
     command: RunCommandType
     issued_at: str
     delay_ms: int | None = None
+    input_values: tuple[float, ...] | None = None
     schema_version: int = CONTRACT_VERSION
     kind: str = "run_command"
 
@@ -67,8 +70,24 @@ class RunCommand:
                 raise ContractError(
                     f"delay_ms должен быть целым от 0 до {MAX_DELAY_MS}"
                 )
+            if self.input_values is not None:
+                raise ContractError("input_values допустимы только для команды set_input")
+        elif self.command is RunCommandType.SET_INPUT:
+            if self.delay_ms is not None:
+                raise ContractError("delay_ms допустим только для команды set_delay")
+            if not self.input_values or len(self.input_values) > 4096:
+                raise ContractError("set_input требует от 1 до 4096 входных значений")
+            if any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                for value in self.input_values
+            ):
+                raise ContractError("input_values должны быть конечными числами")
         elif self.delay_ms is not None:
             raise ContractError("delay_ms допустим только для команды set_delay")
+        elif self.input_values is not None:
+            raise ContractError("input_values допустимы только для команды set_input")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -79,6 +98,7 @@ class RunCommand:
             "issued_at": self.issued_at,
             "command": self.command.value,
             "delay_ms": self.delay_ms,
+            "input_values": list(self.input_values) if self.input_values is not None else None,
         }
 
     @classmethod
@@ -88,12 +108,15 @@ class RunCommand:
             seq = value["seq"]
         except (KeyError, ValueError) as exc:
             raise ContractError(f"неизвестная команда запуска: {value.get('command')!r}") from exc
+        raw_input = value.get("input_values")
+        input_values = tuple(raw_input) if isinstance(raw_input, list) else raw_input
         return cls(
             run_id=str(value.get("run_id", "")),
             seq=seq,
             command=command,
             issued_at=str(value.get("issued_at", "")),
             delay_ms=value.get("delay_ms"),
+            input_values=input_values,
             schema_version=value.get("schema_version"),
             kind=value.get("kind"),
         )
@@ -152,6 +175,7 @@ def append_run_command(
     command: RunCommandType,
     *,
     delay_ms: int | None = None,
+    input_values: tuple[float, ...] | None = None,
 ) -> RunCommand:
     """Атомарно для одного API-процесса дописать следующую команду."""
     run_dir = Path(run_dir).resolve()
@@ -164,6 +188,7 @@ def append_run_command(
             command=command,
             issued_at=utc_offset_iso(),
             delay_ms=delay_ms,
+            input_values=input_values,
         )
         relative = manifest.artifacts.get("commands", COMMANDS_FILE)
         path = (run_dir / relative).resolve()
@@ -206,6 +231,8 @@ class CooperativeRunControl:
         )
         self._step_budget = 0
         self._delay_ms = 0
+        self._input_seq = 0
+        self._input_values: tuple[float, ...] | None = None
         self._cancel_requested = False
 
     @property
@@ -215,6 +242,29 @@ class CooperativeRunControl:
     @property
     def last_seq(self) -> int:
         return self._last_seq
+
+    @property
+    def input_seq(self) -> int:
+        return self._input_seq
+
+    @property
+    def input_values(self) -> tuple[float, ...] | None:
+        return self._input_values
+
+    def wait_for_input(
+        self,
+        *,
+        after_seq: int = 0,
+    ) -> tuple[int, tuple[float, ...]]:
+        """Дождаться нового типизированного входа, не расходуя budget шага."""
+        while True:
+            self._apply_new_commands()
+            if self._cancel_requested:
+                raise RunCancelled("прогон отменён пользователем")
+            self._transition(self._mode)
+            if self._input_seq > after_seq and self._input_values is not None:
+                return self._input_seq, self._input_values
+            self._sleep(self.poll_interval)
 
     def checkpoint(
         self,
@@ -270,6 +320,9 @@ class CooperativeRunControl:
                 self._step_budget += 1
             elif command.command is RunCommandType.SET_DELAY:
                 self._delay_ms = int(command.delay_ms or 0)
+            elif command.command is RunCommandType.SET_INPUT:
+                self._input_seq = command.seq
+                self._input_values = tuple(float(value) for value in command.input_values or ())
             elif command.command is RunCommandType.CANCEL:
                 self._cancel_requested = True
 

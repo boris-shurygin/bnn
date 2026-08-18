@@ -33,6 +33,7 @@ from bioplast.runner.contracts import (
     iter_events,
     load_model_manifest,
     load_run_manifest,
+    utc_offset_iso,
     write_model_manifest,
     write_run_manifest,
 )
@@ -52,6 +53,11 @@ from bioplast.runner.checkpoints import (
 from bioplast.runner.inspection import InspectionError, inspect_model, inspect_tensor
 from bioplast.runner.experiment import ExperimentResult, ModelArtifacts
 from bioplast.runner.queue import RunScheduler, run_queue
+from bioplast.runner.snapshots import (
+    XorForwardSnapshot,
+    load_xor_forward_snapshot,
+    write_xor_forward_snapshot,
+)
 
 __all__ = [
     "CONTRACT_VERSION",
@@ -76,6 +82,7 @@ __all__ = [
     "RunStatus",
     "TensorSpec",
     "TensorSummary",
+    "XorForwardSnapshot",
     "append_event",
     "append_run_command",
     "cancel_prepared_run",
@@ -88,14 +95,17 @@ __all__ = [
     "load_model_manifest",
     "load_run_manifest",
     "load_training_checkpoint",
+    "load_xor_forward_snapshot",
     "make_run_id",
     "prepare_run",
     "read_run_commands",
     "run_config",
     "run_prepared",
     "run_queue",
+    "utc_offset_iso",
     "validate_run_config",
     "write_model_manifest",
     "write_run_manifest",
     "write_training_checkpoint",
+    "write_xor_forward_snapshot",
 ]
