@@ -521,3 +521,62 @@ recovery на каждом safe point; новый процесс нужен то
 от main pool, ввести worker/activity leases и heartbeat, сохранять постоянный
 recovery-checkpoint, переводить неактивную сессию в `suspended` и продолжать тот
 же `run_id` после пробуждения, падения процесса или перезапуска машины.
+
+---
+
+## V.10 — долговечный supervisor и восстановление debug-сессий (2026-08-19)
+
+**Сделано.** Общий scheduler заменён на `RunSupervisor` с независимыми main и
+debug исполнителями. Ожидающая пользовательского ввода debug-сессия больше не
+занимает слот обычного обучения. Для каждого worker введены атомарный claim,
+номер attempt и heartbeat в `worker.json`; пользовательская активность хранится
+отдельной скользящей lease и продлевается только командами, открытием карточки и
+throttled heartbeat видимой вкладки после реального взаимодействия. Фоновый
+polling lease не продлевает.
+
+XOR debug после отсутствия пользователя сохраняет согласованное состояние и
+переходит в `suspended`, освобождая процесс. `resume`, `step` или `set_input`
+создают новый debug worker, проверяют checksum и версию adapter, затем продолжают
+тот же `run_id` со следующей фазой `input → forward_hidden → forward_output`.
+При старте supervisor stale lease переводится в `interrupted`; повреждённый
+recovery остаётся доступен для инспекции с явной причиной недоступности resume.
+Итоговый `checkpoint.pt` не смешивается с runtime recovery: бинарные состояния
+публикуются неизменяемыми поколениями, а `recovery/state.json` атомарно
+переключается последним.
+
+API и карточка показывают pool, attempt, worker heartbeat, activity lease,
+recovery generation и safe-point cursor. Добавлены статусы `suspended` и
+`interrupted`, пробуждение неактивной сессии и отдельная терминальная отмена.
+Документы контрактов, API, UI, lifecycle, roadmap и README приведены к V.10.
+
+**Проверено.** Полный набор из 111 тестов проходит; остаётся прежнее
+предупреждение Starlette о deprecated-интеграции `httpx` через `TestClient`.
+Реальные Windows spawn-тесты подтвердили, что debug и main выполняются
+одновременно, inactivity освобождает процесс, новый attempt продолжает тот же
+run без повторных событий, corrupted checksum запрещает resume, а startup
+reconciliation отличает stale lease. Отдельный end-to-end сценарий прошёл
+pause/step/resume/cancel и послойный XOR forward после гибернации.
+
+**Сломалось.** Первые тестовые leases были короче импорта PyTorch, поэтому новый
+worker успевал снова уснуть до обработки команды; начало lease перенесено к
+фактическому входу в эксперимент. Замена одного `recovery/checkpoint.pt`
+создавала окно, где старый `state.json` видел уже новый бинарник и ложный
+checksum mismatch; бинарники сделаны неизменяемыми по поколениям. Затем полный
+spawn-suite поймал Windows `WinError 5` при `os.replace(run.json.tmp, run.json)`,
+когда UI одновременно читал цель: atomic writer получил уникальные temp-файлы и
+ограниченный retry sharing violation. Два старых smoke-теста также использовали
+один накопительный deadline на несколько независимых фаз; deadline разделён по
+переходам.
+
+**Что запомнить.** Атомарность пары файлов нельзя получить двумя последовательными
+`replace`: нужен неизменяемый payload и один атомарно переключаемый указатель.
+Append-only событие и recovery тоже имеют узкое окно, поэтому при восстановлении
+adapter обязан согласовать сохранённый cursor с уже опубликованным хвостом
+`events.jsonl`. Activity пользователя, жизнь worker и научное состояние — три
+разных факта и должны иметь разные долговечные контракты. На Windows атомарная
+замена логически корректна, но требует retry краткого sharing violation.
+
+**Следующее действие.** Сессия V.11: добавить recovery-adapter обычного обучения
+для backprop-XOR и MNIST — сохранять model/optimizer, epoch/batch/global step,
+permutation/sampler и состояния Python/NumPy/torch CPU/CUDA RNG, затем проверить
+продолжение interrupted запуска с последней safe point настоящим Windows spawn.
