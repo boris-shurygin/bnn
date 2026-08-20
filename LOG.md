@@ -580,3 +580,28 @@ adapter обязан согласовать сохранённый cursor с у�
 для backprop-XOR и MNIST — сохранять model/optimizer, epoch/batch/global step,
 permutation/sampler и состояния Python/NumPy/torch CPU/CUDA RNG, затем проверить
 продолжение interrupted запуска с последней safe point настоящим Windows spawn.
+
+---
+
+## Процесс — автоматический вызов проектных скиллов (2026-08-20)
+
+**Сделано.** Для проектных скиллов `continue-work` и `finish-stage` включён
+`policy.allow_implicit_invocation`. Теперь новые чаты могут выбирать эти
+workflow не только по явному `$skill`, но и по описанным в `SKILL.md` фразам.
+
+**Проверено.** Полный набор из 111 тестов проходит; остаётся известное
+предупреждение Starlette о deprecated-интеграции `httpx` через `TestClient`.
+`git diff --check` также проходит.
+
+**Сломалось.** Штатный `quick_validate.py` из системного `skill-creator` не
+запустился без модуля PyYAML. Изменение ограничено двумя булевыми полями в уже
+существующих корректных `openai.yaml`; функциональных дефектов не обнаружено.
+
+**Что запомнить.** Наличие скилла в `.agents/skills` ещё не гарантирует его
+неявный выбор: `allow_implicit_invocation: false` оставляет только явный вызов
+через `$skill`. После изменения метаданных новый чат или перезапуск клиента
+надёжнее повторного использования уже сформированного контекста.
+
+**Следующее действие.** Сессия V.11: добавить recovery-adapter обычного обучения
+для backprop-XOR и MNIST с состояниями model/optimizer, batch/sampler и RNG,
+затем проверить продолжение interrupted запуска настоящим Windows spawn.
