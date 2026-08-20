@@ -4,4 +4,4 @@ interface:
   default_prompt: "Используй $continue-work, чтобы восстановить контекст проекта и продолжить работу."
 
 policy:
-  allow_implicit_invocation: false
+  allow_implicit_invocation: true

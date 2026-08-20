@@ -4,4 +4,4 @@ interface:
   default_prompt: "Используй $finish-stage, чтобы завершить текущий этап проекта."
 
 policy:
-  allow_implicit_invocation: false
+  allow_implicit_invocation: true
