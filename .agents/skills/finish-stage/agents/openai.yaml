@@ -1,7 +1,7 @@
 interface:
   display_name: "Завершить этап"
   short_description: "Проверить, влить и опубликовать готовый этап"
-  default_prompt: "Используй $finish-stage, чтобы завершить текущий этап проекта."
+  default_prompt: "Используй $finish-stage, чтобы завершить текущий этап проекта, включая отправку итогового main в origin."
 
 policy:
   allow_implicit_invocation: true
