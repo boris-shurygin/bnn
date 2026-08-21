@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import Future
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import replace
 
 import pytest
@@ -246,3 +248,34 @@ def test_startup_reconciliation_marks_only_stale_worker_lease_interrupted(tmp_pa
         assert not (run_dir / "worker.json").exists()
     finally:
         supervisor.shutdown()
+
+
+def test_late_broken_pool_callback_does_not_discard_replacement_executor(tmp_path):
+    runs_dir = tmp_path / "runs"
+    run_dir = prepare_run(
+        {
+            "session": "V.11",
+            "dataset": "xor",
+            "model": "mlp-2-3-1",
+            "experiment": "xor_backprop",
+            "device": "cpu",
+            "seed": 0,
+        },
+        runs_dir=runs_dir,
+    )
+    supervisor = _supervisor(runs_dir)
+    old_executor = object()
+    replacement_executor = object()
+    future: Future = Future()
+    future.set_exception(BrokenProcessPool("old pool crashed"))
+    supervisor._main_futures[future] = (  # type: ignore[assignment]
+        run_dir,
+        1,
+        old_executor,
+    )
+    supervisor._main_executor = replacement_executor  # type: ignore[assignment]
+
+    supervisor._main_done(future)
+
+    assert supervisor._main_executor is replacement_executor
+    assert load_run_manifest(run_dir).status is RunStatus.INTERRUPTED

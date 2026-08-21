@@ -14,10 +14,18 @@ import torch
 from torch import nn
 
 from bioplast.diagnostics.probes import log_module_state
-from bioplast.runner import ExperimentResult, ModelArtifacts
+from bioplast.runner import (
+    ContractError,
+    ExperimentResult,
+    ModelArtifacts,
+    load_training_recovery,
+    recovery_interval,
+    write_training_recovery,
+)
 
 XOR_X = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]]
 XOR_Y = [0.0, 1.0, 1.0, 0.0]
+RECOVERY_ADAPTER = "xor_backprop_v1"
 
 
 class MLP(nn.Module):
@@ -65,8 +73,53 @@ def run(config: dict[str, Any], ctx) -> ExperimentResult:
     solved_at: int | None = None
     loss_value = float("nan")
     accuracy = 0.0
+    next_step = 0
+    every = recovery_interval(config, default=1)
 
-    for step in range(steps + 1):
+    recovery_path = ctx.run_dir / "recovery" / "state.json"
+    if recovery_path.is_file():
+        recovery_state, training = load_training_recovery(
+            ctx, config, adapter=RECOVERY_ADAPTER
+        )
+        try:
+            model.load_state_dict(training["model_state_dict"], strict=True)
+            optimizer.load_state_dict(training["optimizer_state_dict"])
+            next_step = int(training["next_step"])
+            solved_at = training.get("solved_at")
+            solved_at = int(solved_at) if solved_at is not None else None
+            loss_value = float(training["loss_value"])
+            accuracy = float(training["accuracy"])
+            metrics_rows = training["metrics_rows"]
+        except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+            raise ContractError(f"некорректный XOR training recovery: {exc}") from exc
+        if not isinstance(metrics_rows, list) or not 0 <= next_step <= steps + 1:
+            raise ContractError("XOR training recovery содержит неверный progress cursor")
+        ctx.metrics.rows = list(metrics_rows)
+        ctx.log.info(
+            "XOR training recovery #%s: следующий шаг %d/%d",
+            recovery_state.get("generation"),
+            next_step,
+            steps,
+        )
+    else:
+        write_training_recovery(
+            ctx,
+            config,
+            adapter=RECOVERY_ADAPTER,
+            cursor="before_train_step:0",
+            progress={"next_step": 0, "global_step": 0},
+            training={
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "next_step": 0,
+                "solved_at": None,
+                "loss_value": loss_value,
+                "accuracy": accuracy,
+                "metrics_rows": [],
+            },
+        )
+
+    for step in range(next_step, steps + 1):
         ctx.control.checkpoint(step=step, phase="train_step")
         logits, acts = model(x, collect=True)
         loss = loss_fn(logits, y)
@@ -97,6 +150,25 @@ def run(config: dict[str, Any], ctx) -> ExperimentResult:
 
         if step < steps:
             optimizer.step()
+
+        next_step = step + 1
+        if next_step % every == 0 or next_step > steps:
+            write_training_recovery(
+                ctx,
+                config,
+                adapter=RECOVERY_ADAPTER,
+                cursor=f"after_train_step:{step}",
+                progress={"next_step": next_step, "global_step": next_step},
+                training={
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "next_step": next_step,
+                    "solved_at": solved_at,
+                    "loss_value": loss_value,
+                    "accuracy": accuracy,
+                    "metrics_rows": list(ctx.metrics.rows),
+                },
+            )
 
     solved = bool(accuracy == 1.0 and loss_value < loss_target)
     ctx.log.info("итог: loss=%.5f, acc=%.2f, solved=%s", loss_value, accuracy, solved)

@@ -89,8 +89,10 @@ runs/20260808-095245-ses0.4-mnist-mlp-784-256-10-s0-bp/
 согласованных snapshots worker-процесса. Main/debug workers уже разделены;
 activity lease освобождает забытые debug-сессии,
 а recovery-поколения продолжают тот же `run_id` после гибернации или потери
-процесса. Следующий шаг — V.11: recovery-adapter обычного обучения с состояниями
-модели, optimizer, batch/sampler и генераторов случайных чисел.
+процесса. Обычное обучение XOR и MNIST также возобновляется после потери
+main worker: recovery сохраняет model/optimizer, точный progress cursor,
+permutation MNIST и состояния Python/NumPy/torch CPU/CUDA RNG. Следующий шаг —
+V.12: пошаговый обучающий шаг XOR с `W_before`, `ΔW` и `W_after`.
 
 | Эталон | Результат |
 |---|---|

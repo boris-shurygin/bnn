@@ -200,9 +200,14 @@ def write_recovery(
     cursor: str,
     command_seq: int,
     event_seq: int,
+    progress: Mapping[str, Any] | None = None,
+    retain_generations: int | None = None,
 ) -> dict[str, Any]:
     """Publish a binary payload first and ``state.json`` last."""
     import torch
+
+    if retain_generations is not None and retain_generations < 1:
+        raise ValueError("retain_generations должен быть положительным")
 
     root = Path(run_dir).resolve() / "recovery"
     root.mkdir(parents=True, exist_ok=True)
@@ -228,7 +233,23 @@ def write_recovery(
         "checkpoint_sha256": checksum,
         "written_at": utc_offset_iso(),
     }
+    if progress is not None:
+        state["progress"] = dict(progress)
     _atomic_json(root / "state.json", state)
+    if retain_generations is not None:
+        oldest_kept = max(1, generation - retain_generations + 1)
+        for old_checkpoint in root.glob("checkpoint-*.pt"):
+            try:
+                old_generation = int(old_checkpoint.stem.removeprefix("checkpoint-"))
+            except ValueError:
+                continue
+            if old_generation < oldest_kept:
+                try:
+                    old_checkpoint.unlink()
+                except OSError:
+                    # A concurrent reader may still hold the previous immutable
+                    # generation on Windows. A later save will retry cleanup.
+                    pass
     return state
 
 

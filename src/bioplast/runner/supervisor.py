@@ -9,6 +9,7 @@ import time
 import uuid
 from collections import deque
 from concurrent.futures import Future, ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import replace
 from pathlib import Path
 from threading import Event, Lock, Thread
@@ -134,7 +135,9 @@ class RunSupervisor:
         self.monitor_interval = float(monitor_interval)
         self.instance_id = uuid.uuid4().hex
         self._main_executor: ProcessPoolExecutor | None = None
-        self._main_futures: dict[Future[dict[str, Any]], tuple[Path, int]] = {}
+        self._main_futures: dict[
+            Future[dict[str, Any]], tuple[Path, int, ProcessPoolExecutor]
+        ] = {}
         self._debug_processes: dict[Path, tuple[multiprocessing.Process, int]] = {}
         self._debug_queue: deque[tuple[Path, bool]] = deque()
         self._queued: set[Path] = set()
@@ -157,7 +160,7 @@ class RunSupervisor:
             self._ensure_accepting()
             self._ensure_monitor_locked()
             if path in self._queued or path in self._debug_processes or any(
-                item == path for item, _attempt in self._main_futures.values()
+                item == path for item, _attempt, _executor in self._main_futures.values()
             ):
                 return
             if _is_debug_run(path):
@@ -180,19 +183,27 @@ class RunSupervisor:
             self._ensure_accepting()
             self._ensure_monitor_locked()
             manifest = load_run_manifest(path)
+            is_debug = _is_debug_run(path)
             if manifest.status in {RunStatus.RUNNING, RunStatus.PAUSED, RunStatus.QUEUED}:
-                touch_activity(path, timeout_sec=self.debug_inactive_timeout_sec)
+                if is_debug:
+                    touch_activity(path, timeout_sec=self.debug_inactive_timeout_sec)
                 return False
             if manifest.status not in {RunStatus.SUSPENDED, RunStatus.INTERRUPTED}:
                 return False
             availability = recovery_availability(path)
             if not availability.available:
                 raise RuntimeError(f"resume недоступен: {availability.reason}")
-            touch_activity(path, timeout_sec=self.debug_inactive_timeout_sec)
-            if path not in self._queued and path not in self._debug_processes:
-                self._debug_queue.append((path, True))
-                self._queued.add(path)
-                self._dispatch_debug_locked()
+            if is_debug:
+                touch_activity(path, timeout_sec=self.debug_inactive_timeout_sec)
+                if path not in self._queued and path not in self._debug_processes:
+                    self._debug_queue.append((path, True))
+                    self._queued.add(path)
+                    self._dispatch_debug_locked()
+            elif not any(
+                candidate == path
+                for candidate, _attempt, _executor in self._main_futures.values()
+            ):
+                self._submit_main_locked(path, resume=True)
             return True
 
     def cancel(self, run_dir: Path | str) -> bool:
@@ -211,7 +222,11 @@ class RunSupervisor:
             if removed:
                 return True
             future = next(
-                (future for future, (candidate, _attempt) in self._main_futures.items() if candidate == path),
+                (
+                    future
+                    for future, (candidate, _attempt, _executor) in self._main_futures.items()
+                    if candidate == path
+                ),
                 None,
             )
             return bool(future is not None and future.cancel())
@@ -315,7 +330,7 @@ class RunSupervisor:
         except Exception:
             clear_worker_lease(path, attempt=attempt)
             raise
-        self._main_futures[future] = (path, attempt)
+        self._main_futures[future] = (path, attempt, self._main_executor)
         future.add_done_callback(self._main_done)
 
     def _main_done(self, future: Future[dict[str, Any]]) -> None:
@@ -323,14 +338,22 @@ class RunSupervisor:
             item = self._main_futures.pop(future, None)
         if item is None:
             return
-        path, attempt = item
+        path, attempt, executor = item
         try:
             error = None if future.cancelled() else future.exception()
         except BaseException as exc:
             error = exc
         if error is not None:
+            if isinstance(error, BrokenProcessPool):
+                # A hard worker crash poisons ProcessPoolExecutor permanently.
+                # The next resume attempt must get a fresh spawn pool.
+                with self._lock:
+                    if self._main_executor is executor:
+                        self._main_executor = None
+            clear_worker_lease(path, attempt=attempt)
             self._mark_interrupted(path, f"main worker process crashed: {error!r}")
-        clear_worker_lease(path, attempt=attempt)
+        else:
+            clear_worker_lease(path, attempt=attempt)
 
     def _dispatch_debug_locked(self) -> None:
         if not self._accepting:

@@ -15,10 +15,19 @@ from torch import nn
 
 from bioplast.data import load_mnist
 from bioplast.diagnostics.probes import log_module_state
-from bioplast.runner import ExperimentResult, ModelArtifacts
+from bioplast.runner import (
+    ContractError,
+    ExperimentResult,
+    ModelArtifacts,
+    load_training_recovery,
+    recovery_interval,
+    write_training_recovery,
+)
 
 # Дублирование MLP с xor_backprop.py — намеренное: правило трёх, второй раз
 # ещё не повод заводить общий модуль.
+
+RECOVERY_ADAPTER = "mnist_mlp_backprop_v1"
 
 
 class MLP(nn.Module):
@@ -48,6 +57,29 @@ def evaluate(model: nn.Module, x: torch.Tensor, y: torch.Tensor, batch: int = 20
         logits = model(x[start : start + batch])
         correct += (logits.argmax(dim=1) == y[start : start + batch]).sum().item()
     return correct / x.shape[0]
+
+
+def _gradient_state(model: nn.Module) -> dict[str, torch.Tensor | None]:
+    return {
+        name: parameter.grad.detach().cpu().clone() if parameter.grad is not None else None
+        for name, parameter in model.named_parameters()
+    }
+
+
+def _restore_gradients(model: nn.Module, state: dict[str, Any]) -> None:
+    parameters = dict(model.named_parameters())
+    if set(state) != set(parameters):
+        raise ContractError("MNIST recovery содержит несовместимый набор gradients")
+    for name, value in state.items():
+        if value is None:
+            parameters[name].grad = None
+        elif isinstance(value, torch.Tensor):
+            parameters[name].grad = value.to(
+                device=parameters[name].device,
+                dtype=parameters[name].dtype,
+            )
+        else:
+            raise ContractError(f"gradient {name!r} в MNIST recovery не является tensor")
 
 
 def run(config: dict[str, Any], ctx) -> ExperimentResult:
@@ -87,14 +119,163 @@ def run(config: dict[str, Any], ctx) -> ExperimentResult:
     generator = torch.Generator(device=device).manual_seed(ctx.seed)
     test_acc = 0.0
     train_step = 0
+    epoch = 1
+    batch_start = 0
+    order: torch.Tensor | None = None
+    total_loss, seen, correct = 0.0, 0, 0
+    acts: dict[str, torch.Tensor] = {}
+    train_loss = float("nan")
+    train_acc = 0.0
+    every = recovery_interval(config, default=50)
 
-    for epoch in range(1, epochs + 1):
+    recovery_path = ctx.run_dir / "recovery" / "state.json"
+    if recovery_path.is_file():
+        recovery_state, training = load_training_recovery(
+            ctx, config, adapter=RECOVERY_ADAPTER
+        )
+        try:
+            model.load_state_dict(training["model_state_dict"], strict=True)
+            optimizer.load_state_dict(training["optimizer_state_dict"])
+            generator_state = training["generator_state"]
+            if not isinstance(generator_state, torch.Tensor):
+                raise TypeError("generator_state is not a tensor")
+            generator.set_state(generator_state.detach().cpu())
+            epoch = int(training["epoch"])
+            batch_start = int(training["batch_start"])
+            train_step = int(training["global_step"])
+            raw_order = training.get("permutation")
+            order = raw_order.to(device=device) if isinstance(raw_order, torch.Tensor) else None
+            total_loss = float(training["total_loss"])
+            seen = int(training["seen"])
+            correct = int(training["correct"])
+            test_acc = float(training["test_acc"])
+            train_loss = float(training["train_loss"])
+            train_acc = float(training["train_acc"])
+            raw_acts = training["last_acts"]
+            gradients = training["gradients"]
+            metrics_rows = training["metrics_rows"]
+        except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+            raise ContractError(f"некорректный MNIST training recovery: {exc}") from exc
+        batches_per_epoch = (data.train_x.shape[0] + batch_size - 1) // batch_size
+        completed_batches = (
+            (batch_start + batch_size - 1) // batch_size if order is not None else 0
+        )
+        expected_step = (epoch - 1) * batches_per_epoch + completed_batches
+        permutation_valid = order is None or (
+            order.ndim == 1
+            and order.numel() == data.train_x.shape[0]
+            and torch.equal(
+                torch.sort(order.detach().cpu()).values,
+                torch.arange(data.train_x.shape[0]),
+            )
+        )
+        if (
+            not isinstance(raw_acts, dict)
+            or not isinstance(gradients, dict)
+            or not isinstance(metrics_rows, list)
+            or not 1 <= epoch <= epochs + 1
+            or not 0 <= batch_start <= data.train_x.shape[0]
+            or (order is None and batch_start != 0)
+            or (
+                order is not None
+                and batch_start != data.train_x.shape[0]
+                and batch_start % batch_size != 0
+            )
+            or not permutation_valid
+            or len(metrics_rows) != epoch - 1
+            or train_step != expected_step
+            or (order is not None and seen != batch_start)
+        ):
+            raise ContractError("MNIST training recovery содержит неверный progress cursor")
+        acts = {
+            str(name): value.to(device=device)
+            for name, value in raw_acts.items()
+            if isinstance(value, torch.Tensor)
+        }
+        if len(acts) != len(raw_acts):
+            raise ContractError("MNIST recovery содержит не-tensor activation")
+        _restore_gradients(model, gradients)
+        ctx.metrics.rows = list(metrics_rows)
+        ctx.log.info(
+            "MNIST training recovery #%s: epoch=%d, batch_start=%d, global_step=%d",
+            recovery_state.get("generation"),
+            epoch,
+            batch_start,
+            train_step,
+        )
+    else:
+        write_training_recovery(
+            ctx,
+            config,
+            adapter=RECOVERY_ADAPTER,
+            cursor="before_epoch:1",
+            progress={"epoch": 1, "batch": 0, "global_step": 0},
+            training={
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "generator_state": generator.get_state(),
+                "epoch": 1,
+                "batch_start": 0,
+                "global_step": 0,
+                "permutation": None,
+                "total_loss": 0.0,
+                "seen": 0,
+                "correct": 0,
+                "test_acc": test_acc,
+                "train_loss": train_loss,
+                "train_acc": train_acc,
+                "last_acts": {},
+                "gradients": _gradient_state(model),
+                "metrics_rows": [],
+            },
+        )
+
+    def save_recovery(cursor: str) -> None:
+        write_training_recovery(
+            ctx,
+            config,
+            adapter=RECOVERY_ADAPTER,
+            cursor=cursor,
+            progress={
+                "epoch": epoch,
+                "batch": batch_start // batch_size,
+                "global_step": train_step,
+            },
+            training={
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "generator_state": generator.get_state(),
+                "epoch": epoch,
+                "batch_start": batch_start,
+                "global_step": train_step,
+                "permutation": order.detach().cpu() if order is not None else None,
+                "total_loss": total_loss,
+                "seen": seen,
+                "correct": correct,
+                "test_acc": test_acc,
+                "train_loss": train_loss,
+                "train_acc": train_acc,
+                "last_acts": {
+                    name: value.detach().cpu().clone() for name, value in acts.items()
+                },
+                "gradients": _gradient_state(model),
+                "metrics_rows": list(ctx.metrics.rows),
+            },
+        )
+
+    n = data.train_x.shape[0]
+    while epoch <= epochs:
         model.train()
-        total_loss, seen, correct = 0.0, 0, 0
-        acts: dict[str, torch.Tensor] = {}
+        if order is None:
+            order = torch.randperm(n, device=data.train_x.device, generator=generator)
+            batch_start = 0
+            total_loss, seen, correct = 0.0, 0, 0
+            acts = {}
 
-        for xb, yb in data.batches(batch_size, shuffle=True, generator=generator):
+        for start in range(batch_start, n, batch_size):
             ctx.control.checkpoint(step=train_step, phase="train_batch")
+            idx = order[start : start + batch_size]
+            xb, yb = data.train_x[idx], data.train_y[idx]
             logits, acts = model(xb, collect=True)
             loss = loss_fn(logits, yb)
 
@@ -106,24 +287,33 @@ def run(config: dict[str, Any], ctx) -> ExperimentResult:
             correct += (logits.argmax(dim=1) == yb).sum().item()
             seen += xb.shape[0]
             train_step += 1
+            batch_start = min(start + batch_size, n)
+            if train_step % every == 0 or batch_start >= n:
+                save_recovery(f"after_train_batch:{train_step}")
 
         model.eval()
         test_acc = evaluate(model, data.test_x, data.test_y)
         train_loss = total_loss / seen
+        train_acc = correct / seen
 
         # градиенты последнего батча ещё в .grad — снимаем состояние после эпохи
         ctx.metrics.update(
             epoch,
             {
                 "loss/train": train_loss,
-                "acc/train": correct / seen,
+                "acc/train": train_acc,
                 "acc/test": test_acc,
                 **log_module_state(model, acts),
             },
         )
         ctx.log.info(
-            "эпоха %2d: loss=%.4f, train=%.4f, test=%.4f", epoch, train_loss, correct / seen, test_acc
+            "эпоха %2d: loss=%.4f, train=%.4f, test=%.4f", epoch, train_loss, train_acc, test_acc
         )
+        completed_epoch = epoch
+        epoch += 1
+        batch_start = 0
+        order = None
+        save_recovery(f"after_epoch:{completed_epoch}")
 
     last_layer = len(model.layers) - 1
     single_hidden = last_layer == 1
@@ -143,7 +333,7 @@ def run(config: dict[str, Any], ctx) -> ExperimentResult:
     return ExperimentResult(
         final={
             "test_acc": test_acc,
-            "train_acc": correct / seen,
+            "train_acc": train_acc,
             "train_loss": train_loss,
             "params": sum(p.numel() for p in model.parameters()),
         },

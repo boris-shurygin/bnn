@@ -10,6 +10,10 @@ V.9 добавила дочернюю интерактивную XOR-сесси�
 V.10 заменила общий scheduler на долговечный `RunSupervisor`: main pool отделён
 от disposable debug workers, а suspended/interrupted XOR-сессия продолжает тот
 же `run_id` из проверенного recovery-поколения.
+V.11 добавила recovery обычного обучения: `resume` для interrupted
+backprop-XOR/MNIST создаёт новый main attempt, а не debug worker, и продолжает
+с сохранённого шага/batch. После hard crash отравленный `ProcessPoolExecutor`
+заменяется новым spawn-pool перед возобновлением.
 
 Запуск из корня проекта:
 
@@ -173,11 +177,13 @@ worker-процесса.
 возвращают 409, неверный payload — 422, успешная запись в `commands.jsonl` —
 `202 Accepted` с записанной командой и обновлённым control state.
 
-В `suspended`/`interrupted` команды `resume`, `step` и `set_input` доступны
-только при валидном checksum и совместимом recovery adapter. Команда сначала
-продлевает activity lease, затем будит новый debug-процесс; обычные команды
-живому worker процесс не пересоздают. `cancel` завершает неактивную сессию без
-создания worker. Фоновый GET/polling lease не продлевает.
+В `suspended`/`interrupted` команды доступны только при валидном checksum и
+совместимом recovery adapter. Для debug это `resume`, `step` и `set_input`:
+команда сначала продлевает activity lease, затем будит новый debug-процесс. Для
+interrupted обычного обучения V.11 доступен `resume`, который создаёт новый
+attempt в main pool. Обычные команды живому worker процесс не пересоздают.
+`cancel` завершает неактивный запуск без создания worker. Фоновый GET/polling
+lease debug-сессии не продлевает.
 
 Control state также возвращает объект `debug` из capabilities сессии и
 `accepts_input`. UI не определяет отладочный режим по имени эксперимента:
