@@ -77,9 +77,15 @@ from bioplast.runner.training_recovery import (
     write_training_recovery,
 )
 from bioplast.runner.snapshots import (
+    XorDecisionSurface,
     XorForwardSnapshot,
+    XorParameterUpdate,
+    XorTrainingLayer,
+    XorTrainStepSnapshot,
     load_xor_forward_snapshot,
+    load_xor_train_step_snapshot,
     write_xor_forward_snapshot,
+    write_xor_train_step_snapshot,
 )
 
 __all__ = [
@@ -109,7 +115,11 @@ __all__ = [
     "TensorSpec",
     "TensorSummary",
     "TRAINING_RECOVERY_VERSION",
+    "XorDecisionSurface",
     "XorForwardSnapshot",
+    "XorParameterUpdate",
+    "XorTrainingLayer",
+    "XorTrainStepSnapshot",
     "append_event",
     "activity_expired",
     "append_run_command",
@@ -131,6 +141,7 @@ __all__ = [
     "load_training_checkpoint",
     "load_training_recovery",
     "load_xor_forward_snapshot",
+    "load_xor_train_step_snapshot",
     "load_worker_lease",
     "make_run_id",
     "prepare_run",
@@ -150,4 +161,5 @@ __all__ = [
     "write_training_checkpoint",
     "write_training_recovery",
     "write_xor_forward_snapshot",
+    "write_xor_train_step_snapshot",
 ]

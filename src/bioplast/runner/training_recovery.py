@@ -135,6 +135,7 @@ def write_training_recovery(
     cursor: str,
     progress: Mapping[str, Any],
     training: Mapping[str, Any],
+    event_seq: int = 0,
 ) -> dict[str, Any]:
     payload = {
         "schema_version": TRAINING_RECOVERY_VERSION,
@@ -155,7 +156,7 @@ def write_training_recovery(
         attempt=ctx.attempt,
         cursor=cursor,
         command_seq=ctx.control.last_seq,
-        event_seq=0,
+        event_seq=event_seq,
         progress=progress,
         retain_generations=3,
     )

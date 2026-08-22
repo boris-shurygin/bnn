@@ -91,8 +91,12 @@ activity lease освобождает забытые debug-сессии,
 а recovery-поколения продолжают тот же `run_id` после гибернации или потери
 процесса. Обычное обучение XOR и MNIST также возобновляется после потери
 main worker: recovery сохраняет model/optimizer, точный progress cursor,
-permutation MNIST и состояния Python/NumPy/torch CPU/CUDA RNG. Следующий шаг —
-V.12: пошаговый обучающий шаг XOR с `W_before`, `ΔW` и `W_after`.
+permutation MNIST и состояния Python/NumPy/torch CPU/CUDA RNG. Backprop-XOR
+публикует согласованные снимки атомарных train-step: точные параметры до шага,
+фактическую `ΔW` Adam, параметры после шага, loss и сетку границы решений.
+Карточка воспроизводит их как heatmap-анимацию; ручной `step` использует тот же
+control path и всегда создаёт кадр. Следующий шаг — V.13: общий реестр
+debug-адаптеров и инспекция MNIST/больших моделей.
 
 | Эталон | Результат |
 |---|---|

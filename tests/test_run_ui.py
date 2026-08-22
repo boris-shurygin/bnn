@@ -162,6 +162,28 @@ def test_detail_page_contains_interactive_xor_controls_and_neuron_graph(tmp_path
     assert ".xor-neuron-active" in css.text
 
 
+def test_detail_page_contains_xor_training_step_animation(tmp_path):
+    client, run_id = _client(tmp_path)
+
+    page = client.get(f"/runs/{run_id}")
+    script = client.get("/static/run-detail.js")
+    css = client.get("/static/app.css")
+
+    assert "Обучающий шаг XOR" in page.text
+    assert 'id="xor-training-play"' in page.text
+    assert 'id="xor-weight-before"' in page.text
+    assert 'id="xor-weight-delta"' in page.text
+    assert 'id="xor-weight-after"' in page.text
+    assert 'id="xor-decision-boundary"' in page.text
+    assert "validateXorTrainingSnapshot" in script.text
+    assert 'event.type === "xor_train_step"' in script.text
+    assert "renderDecisionBoundary" in script.text
+    assert "toggleXorTrainingPlayback" in script.text
+    assert 'payload.config?.experiment === "xor_backprop"' in script.text
+    assert ".xor-update-grid" in css.text
+    assert ".xor-decision-boundary" in css.text
+
+
 def test_comparison_page_uses_local_plotly_and_comparison_api(tmp_path):
     client, _ = _client(tmp_path)
 

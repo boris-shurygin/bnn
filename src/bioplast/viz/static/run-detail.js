@@ -28,6 +28,13 @@ let xorSnapshot = null;
 let xorSnapshotLoading = false;
 let xorCanSetInput = false;
 let xorInputLoading = false;
+let xorTrainingEventSeq = 0;
+let xorTrainingEvents = [];
+let xorTrainingIndex = -1;
+let xorTrainingLoading = false;
+let xorTrainingPlaying = false;
+let xorTrainingTimer = null;
+const xorTrainingSnapshots = new Map();
 let lastUserInteractionAt = Date.now();
 
 function debugCapabilities(config) {
@@ -542,7 +549,8 @@ function setupXorDebug(payload) {
 
 function setupRunControl(payload) {
   const isTerminal = terminalStatuses.has(payload.manifest.status);
-  const supportsStep = debugCapabilities(payload.config)?.supports_step === true;
+  const supportsStep = debugCapabilities(payload.config)?.supports_step === true
+    || payload.config?.experiment === "xor_backprop";
   document.querySelector("#control-panel").classList.toggle("hidden", isTerminal);
   document.querySelectorAll("[data-debug-step]").forEach(element => {
     element.classList.toggle("hidden", !supportsStep);
@@ -676,6 +684,276 @@ function renderTensorHeatmap(tensor, rows) {
   scroll.append(grid);
   section.append(heading, scroll);
   return section;
+}
+
+function validateXorTrainingSnapshot(payload) {
+  if (!payload || payload.schema_version !== 1 || payload.kind !== "xor_train_step_snapshot") {
+    throw new Error("Поддерживается только xor_train_step_snapshot версии 1.");
+  }
+  if (payload.run_id !== runId) throw new Error("Snapshot обучения принадлежит другому запуску.");
+  if (!Number.isInteger(payload.step) || payload.step < 0 || !Number.isFinite(payload.loss)) {
+    throw new Error("Snapshot обучения содержит некорректные step/loss.");
+  }
+  if (!Array.isArray(payload.layers) || !payload.layers.length) {
+    throw new Error("Snapshot обучения не содержит слои.");
+  }
+  for (const layer of payload.layers) {
+    if (!layer.layer_id || !Array.isArray(layer.parameters) || !layer.parameters.length) {
+      throw new Error("Слой snapshot обучения не содержит параметры.");
+    }
+    for (const parameter of layer.parameters) {
+      if (!parameter.name || parameter.before == null || parameter.delta == null || parameter.after == null) {
+        throw new Error("Параметр snapshot требует before/delta/after.");
+      }
+    }
+  }
+  const surface = payload.decision_surface;
+  if (!surface || !Array.isArray(surface.x0) || !Array.isArray(surface.x1)
+    || !Array.isArray(surface.probabilities)
+    || surface.probabilities.length !== surface.x1.length) {
+    throw new Error("Snapshot обучения содержит некорректную границу решений.");
+  }
+}
+
+function jsonTensorShape(value) {
+  const shape = [];
+  let cursor = value;
+  while (Array.isArray(cursor)) {
+    shape.push(cursor.length);
+    cursor = cursor[0];
+  }
+  return shape;
+}
+
+function renderTrainingHeatmap(selector, title, name, values) {
+  const container = document.querySelector(selector);
+  container.replaceChildren();
+  const shape = jsonTensorShape(values);
+  const section = renderTensorHeatmap(
+    { name, shape },
+    tensorRows(values, shape),
+  );
+  section.querySelector("h4").textContent = title;
+  container.append(section);
+}
+
+function renderXorTrainingLoss() {
+  const selected = xorTrainingEvents[xorTrainingIndex];
+  const steps = xorTrainingEvents.map(event => event.step);
+  const losses = xorTrainingEvents.map(event => event.scalars?.loss ?? null);
+  const marker = selected ? [{ x: selected.step, y: selected.scalars?.loss }] : [];
+  Plotly.react("xor-training-loss", [
+    {
+      x: steps, y: losses, type: "scatter", mode: "lines+markers", name: "loss",
+      line: { color: "#50d6d0", width: 2 }, marker: { size: 4 },
+    },
+    {
+      x: marker.map(item => item.x), y: marker.map(item => item.y), type: "scatter",
+      mode: "markers", name: "текущий кадр", hoverinfo: "skip",
+      marker: { size: 12, color: "#f3bf63", line: { color: "#fff4d0", width: 2 } },
+    },
+  ], {
+    margin: { l: 54, r: 18, t: 15, b: 42 },
+    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "#0a151f",
+    font: { color: "#9bb0bd", size: 10 },
+    xaxis: { title: "step", gridcolor: "#213748", zerolinecolor: "#294256" },
+    yaxis: { title: "loss", type: "log", gridcolor: "#213748", zerolinecolor: "#294256" },
+    showlegend: false,
+  }, { responsive: true, displayModeBar: false });
+}
+
+function probabilityColor(value) {
+  const probability = Math.max(0, Math.min(1, Number(value) || 0));
+  const low = [255, 117, 129];
+  const high = [80, 214, 208];
+  const mix = (left, right) => Math.round(left + (right - left) * probability);
+  return `rgb(${mix(low[0], high[0])},${mix(low[1], high[1])},${mix(low[2], high[2])})`;
+}
+
+function renderDecisionBoundary(surface) {
+  const canvas = document.querySelector("#xor-decision-boundary");
+  const context = canvas.getContext("2d");
+  const width = canvas.width;
+  const height = canvas.height;
+  const padding = { left: 58, right: 20, top: 18, bottom: 48 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const rows = surface.probabilities.length;
+  const columns = surface.x0.length;
+  context.clearRect(0, 0, width, height);
+  const cellWidth = plotWidth / columns;
+  const cellHeight = plotHeight / rows;
+  surface.probabilities.forEach((row, rowIndex) => row.forEach((probability, columnIndex) => {
+    context.fillStyle = probabilityColor(probability);
+    context.fillRect(
+      padding.left + columnIndex * cellWidth,
+      padding.top + (rows - rowIndex - 1) * cellHeight,
+      Math.ceil(cellWidth) + 1,
+      Math.ceil(cellHeight) + 1,
+    );
+  }));
+
+  context.strokeStyle = "rgba(255,255,255,.9)";
+  context.lineWidth = 1.4;
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      const current = surface.probabilities[row][column] >= .5;
+      const x = padding.left + column * cellWidth;
+      const y = padding.top + (rows - row - 1) * cellHeight;
+      if (column + 1 < columns && current !== (surface.probabilities[row][column + 1] >= .5)) {
+        context.beginPath(); context.moveTo(x + cellWidth, y); context.lineTo(x + cellWidth, y + cellHeight); context.stroke();
+      }
+      if (row + 1 < rows && current !== (surface.probabilities[row + 1][column] >= .5)) {
+        context.beginPath(); context.moveTo(x, y); context.lineTo(x + cellWidth, y); context.stroke();
+      }
+    }
+  }
+
+  const xMin = surface.x0[0];
+  const xMax = surface.x0[surface.x0.length - 1];
+  const yMin = surface.x1[0];
+  const yMax = surface.x1[surface.x1.length - 1];
+  const projectX = value => padding.left + (value - xMin) / (xMax - xMin) * plotWidth;
+  const projectY = value => padding.top + plotHeight - (value - yMin) / (yMax - yMin) * plotHeight;
+  [[0, 0, 0], [0, 1, 1], [1, 0, 1], [1, 1, 0]].forEach(([x0, x1, target]) => {
+    context.beginPath(); context.arc(projectX(x0), projectY(x1), 8, 0, Math.PI * 2);
+    context.fillStyle = target ? "#50d6d0" : "#ff7581";
+    context.fill(); context.strokeStyle = "#071019"; context.lineWidth = 3; context.stroke();
+  });
+  context.fillStyle = "#9bb0bd";
+  context.font = "12px Inter, sans-serif";
+  context.textAlign = "center";
+  context.fillText("x₀", padding.left + plotWidth / 2, height - 13);
+  context.save(); context.translate(15, padding.top + plotHeight / 2); context.rotate(-Math.PI / 2);
+  context.fillText("x₁", 0, 0); context.restore();
+}
+
+function renderXorTrainingSnapshot(snapshot) {
+  const layerSelect = document.querySelector("#xor-training-layer");
+  const parameterSelect = document.querySelector("#xor-training-parameter");
+  const previousLayer = layerSelect.value;
+  layerSelect.replaceChildren();
+  snapshot.layers.forEach(layer => {
+    const option = node("option", "", layer.layer_id);
+    option.value = layer.layer_id;
+    layerSelect.append(option);
+  });
+  layerSelect.value = snapshot.layers.some(layer => layer.layer_id === previousLayer)
+    ? previousLayer : snapshot.layers[0].layer_id;
+  const layer = snapshot.layers.find(item => item.layer_id === layerSelect.value);
+  const previousParameter = parameterSelect.value;
+  parameterSelect.replaceChildren();
+  layer.parameters.forEach(parameter => {
+    const option = node("option", "", parameter.name);
+    option.value = parameter.name;
+    parameterSelect.append(option);
+  });
+  parameterSelect.value = layer.parameters.some(parameter => parameter.name === previousParameter)
+    ? previousParameter : layer.parameters[0].name;
+  const parameter = layer.parameters.find(item => item.name === parameterSelect.value);
+  const prefix = parameter.name === "weight" ? "W" : "b";
+  renderTrainingHeatmap("#xor-weight-before", `${prefix}_before`, parameter.name, parameter.before);
+  renderTrainingHeatmap("#xor-weight-delta", `Δ${prefix}`, parameter.name, parameter.delta);
+  renderTrainingHeatmap("#xor-weight-after", `${prefix}_after`, parameter.name, parameter.after);
+  renderDecisionBoundary(snapshot.decision_surface);
+  renderXorTrainingLoss();
+  const learning = layer.apical_deviation == null
+    ? " · a−baseline/e: нет у backprop"
+    : " · a−baseline/e сохранены";
+  showNotice("#xor-training-message",
+    `Кадр #${snapshot.seq} · step ${snapshot.step} · loss ${formatValue(snapshot.loss)} · accuracy ${formatValue(snapshot.accuracy)} · ${snapshot.updated ? "параметры обновлены" : "финальная оценка без update"}${learning}`);
+}
+
+async function selectXorTrainingFrame(index) {
+  if (!xorTrainingEvents.length) return;
+  xorTrainingIndex = Math.max(0, Math.min(index, xorTrainingEvents.length - 1));
+  const event = xorTrainingEvents[xorTrainingIndex];
+  const slider = document.querySelector("#xor-training-frame");
+  slider.max = String(xorTrainingEvents.length - 1);
+  slider.value = String(xorTrainingIndex);
+  document.querySelector("#xor-training-frame-label").textContent =
+    `${xorTrainingIndex + 1} / ${xorTrainingEvents.length} · step ${event.step}`;
+  document.querySelector("#xor-training-prev").disabled = xorTrainingIndex === 0;
+  document.querySelector("#xor-training-next").disabled = xorTrainingIndex >= xorTrainingEvents.length - 1;
+  renderXorTrainingLoss();
+  try {
+    let snapshot = xorTrainingSnapshots.get(event.seq);
+    if (!snapshot) {
+      const encodedPath = event.snapshot.split("/").map(encodeURIComponent).join("/");
+      const response = await fetch(`/api/runs/${encodedRunId}/artifacts/${encodedPath}`, { cache: "no-store" });
+      snapshot = await response.json();
+      if (!response.ok) throw new Error(snapshot.detail || `API ответил ${response.status}`);
+      validateXorTrainingSnapshot(snapshot);
+      xorTrainingSnapshots.set(event.seq, snapshot);
+    }
+    if (xorTrainingEvents[xorTrainingIndex]?.seq === event.seq) renderXorTrainingSnapshot(snapshot);
+    showNotice("#xor-training-error", "");
+  } catch (error) {
+    showNotice("#xor-training-error", `Не удалось прочитать train-step snapshot: ${error.message}`);
+  }
+}
+
+function stopXorTrainingPlayback() {
+  xorTrainingPlaying = false;
+  if (xorTrainingTimer !== null) window.clearInterval(xorTrainingTimer);
+  xorTrainingTimer = null;
+  document.querySelector("#xor-training-play").textContent = "Воспроизвести";
+}
+
+function toggleXorTrainingPlayback() {
+  if (xorTrainingPlaying) {
+    stopXorTrainingPlayback();
+    return;
+  }
+  if (xorTrainingEvents.length < 2) return;
+  if (xorTrainingIndex >= xorTrainingEvents.length - 1) xorTrainingIndex = -1;
+  xorTrainingPlaying = true;
+  document.querySelector("#xor-training-play").textContent = "Пауза анимации";
+  xorTrainingTimer = window.setInterval(() => {
+    if (xorTrainingIndex >= xorTrainingEvents.length - 1) {
+      stopXorTrainingPlayback();
+      return;
+    }
+    selectXorTrainingFrame(xorTrainingIndex + 1);
+  }, 450);
+}
+
+async function loadXorTrainingEvents() {
+  if (xorTrainingLoading || detail?.config?.experiment !== "xor_backprop") return;
+  xorTrainingLoading = true;
+  try {
+    const response = await fetch(`/api/runs/${encodedRunId}/events?after_seq=${xorTrainingEventSeq}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || `API ответил ${response.status}`);
+    const wasFollowing = xorTrainingIndex < 0 || xorTrainingIndex === xorTrainingEvents.length - 1;
+    const known = new Set(xorTrainingEvents.map(event => event.seq));
+    const additions = (payload.items || []).filter(event =>
+      event.type === "xor_train_step" && event.snapshot && !known.has(event.seq));
+    xorTrainingEvents.push(...additions);
+    xorTrainingEvents.sort((left, right) => left.seq - right.seq);
+    xorTrainingEventSeq = payload.last_seq ?? xorTrainingEventSeq;
+    document.querySelector("#xor-training-frame").max = String(Math.max(0, xorTrainingEvents.length - 1));
+    if (additions.length && wasFollowing && !xorTrainingPlaying) {
+      await selectXorTrainingFrame(xorTrainingEvents.length - 1);
+    } else if (xorTrainingEvents.length) {
+      renderXorTrainingLoss();
+    } else {
+      const finished = terminalStatuses.has(detail?.manifest?.status);
+      showNotice("#xor-training-message", finished
+        ? "В этом запуске нет V.12-снимков обучающих шагов. Повторите запуск текущим кодом."
+        : "Первый снимок появится после завершения атомарного train-step.");
+    }
+  } catch (error) {
+    showNotice("#xor-training-error", `Не удалось прочитать события обучения: ${error.message}`);
+  } finally {
+    xorTrainingLoading = false;
+  }
+}
+
+function setupXorTraining(payload) {
+  const enabled = payload.config?.experiment === "xor_backprop";
+  document.querySelector("#xor-training-panel").classList.toggle("hidden", !enabled);
+  if (enabled) loadXorTrainingEvents();
 }
 
 const omittedReasons = {
@@ -863,6 +1141,7 @@ function renderDetail(payload) {
   renderArtifacts(payload.artifacts || []);
   loadModel(payload);
   setupRunControl(payload);
+  setupXorTraining(payload);
   setupXorDebug(payload);
   const logPath = payload.manifest.artifacts.log || "run.log";
   const encodedLogPath = logPath.split("/").map(encodeURIComponent).join("/");
@@ -1181,6 +1460,29 @@ async function loadRerunPreview() {
 }
 
 document.querySelector("#start-xor-debug").addEventListener("click", startXorDebug);
+document.querySelector("#xor-training-prev").addEventListener("click", () => {
+  stopXorTrainingPlayback();
+  selectXorTrainingFrame(xorTrainingIndex - 1);
+});
+document.querySelector("#xor-training-next").addEventListener("click", () => {
+  stopXorTrainingPlayback();
+  selectXorTrainingFrame(xorTrainingIndex + 1);
+});
+document.querySelector("#xor-training-play").addEventListener("click", toggleXorTrainingPlayback);
+document.querySelector("#xor-training-frame").addEventListener("input", event => {
+  stopXorTrainingPlayback();
+  selectXorTrainingFrame(Number(event.target.value));
+});
+document.querySelector("#xor-training-layer").addEventListener("change", () => {
+  const event = xorTrainingEvents[xorTrainingIndex];
+  const snapshot = event && xorTrainingSnapshots.get(event.seq);
+  if (snapshot) renderXorTrainingSnapshot(snapshot);
+});
+document.querySelector("#xor-training-parameter").addEventListener("change", () => {
+  const event = xorTrainingEvents[xorTrainingIndex];
+  const snapshot = event && xorTrainingSnapshots.get(event.seq);
+  if (snapshot) renderXorTrainingSnapshot(snapshot);
+});
 document.addEventListener("pointerdown", () => { lastUserInteractionAt = Date.now(); }, { passive: true });
 document.addEventListener("keydown", () => { lastUserInteractionAt = Date.now(); });
 setInterval(renewActivity, 15000);
@@ -1276,6 +1578,7 @@ setInterval(() => {
   if (!detail || !terminalStatuses.has(detail.manifest.status)) loadControl();
 }, 1000);
 setInterval(loadXorEvents, 500);
+setInterval(loadXorTrainingEvents, 500);
 fetchDetail();
 loadControl();
 pollLog(true);

@@ -62,6 +62,49 @@
   </div>
 </section>
 
+<section id="xor-training-panel" class="panel xor-training-panel hidden" aria-labelledby="xor-training-heading">
+  <div class="panel-heading">
+    <div>
+      <h2 id="xor-training-heading">Обучающий шаг XOR</h2>
+      <p>Фактические параметры до и после атомарного шага, loss и граница решений.</p>
+    </div>
+    <span class="mono-label">xor_train_step_snapshot</span>
+  </div>
+  <div class="xor-training-body">
+    <div id="xor-training-message" class="notice notice-info">Ищем снимки обучающих шагов…</div>
+    <div class="xor-training-toolbar">
+      <div class="control-actions" aria-label="Навигация по снимкам обучения">
+        <button id="xor-training-prev" class="button" type="button" aria-label="Предыдущий снимок">←</button>
+        <button id="xor-training-play" class="button button-primary" type="button">Воспроизвести</button>
+        <button id="xor-training-next" class="button" type="button" aria-label="Следующий снимок">→</button>
+      </div>
+      <input id="xor-training-frame" type="range" min="0" max="0" value="0" aria-label="Снимок обучающего шага">
+      <span id="xor-training-frame-label" class="mono-label">кадров нет</span>
+      <label>Слой <select id="xor-training-layer"></select></label>
+      <label>Параметр <select id="xor-training-parameter"></select></label>
+    </div>
+    <div class="xor-training-views">
+      <article class="xor-training-weights">
+        <h3>Изменение параметров</h3>
+        <div class="xor-update-grid">
+          <div id="xor-weight-before"></div>
+          <div id="xor-weight-delta"></div>
+          <div id="xor-weight-after"></div>
+        </div>
+      </article>
+      <article>
+        <h3>Loss по кадрам</h3>
+        <div id="xor-training-loss" class="xor-training-loss" aria-label="Loss обучающих шагов XOR"></div>
+      </article>
+      <article>
+        <h3>Граница решений после шага</h3>
+        <canvas id="xor-decision-boundary" class="xor-decision-boundary" width="540" height="420"></canvas>
+      </article>
+    </div>
+    <div id="xor-training-error" class="notice notice-error hidden" role="alert"></div>
+  </div>
+</section>
+
 <section id="xor-debug-panel" class="panel xor-debug-panel hidden" aria-labelledby="xor-debug-heading">
   <div class="panel-heading">
     <div>
@@ -186,4 +229,4 @@
   <div id="artifact-list" class="artifact-list"><p class="empty">Загрузка…</p></div>
 </section>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', path='/run-detail.js') }}?v=20260818-v10" defer></script>{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', path='/run-detail.js') }}?v=20260821-v12" defer></script>{% endblock %}

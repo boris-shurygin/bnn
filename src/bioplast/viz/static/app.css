@@ -214,6 +214,27 @@ textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; 
 .delay-control label { color: var(--muted); font-size: 11px; }
 .delay-control > div { display: grid; grid-template-columns: minmax(110px, 1fr) auto; gap: 8px; }
 
+.xor-training-panel { margin-bottom: 20px; }
+.xor-training-body { padding: 20px; }
+.xor-training-toolbar { display: grid; grid-template-columns: auto minmax(180px, 1fr) auto auto auto; align-items: end; gap: 12px; margin: 16px 0; }
+.xor-training-toolbar > label { display: grid; gap: 6px; color: var(--muted); font-size: 10px; }
+.xor-training-toolbar select { min-width: 112px; }
+.xor-training-toolbar input[type="range"] { width: 100%; accent-color: var(--cyan); }
+.xor-training-views { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(320px, .8fr); gap: 16px; }
+.xor-training-views > article { min-width: 0; border: 1px solid #294256; border-radius: 12px; background: rgba(7,16,25,.64); overflow: hidden; }
+.xor-training-views > article > h3 { margin: 0; padding: 13px 16px; border-bottom: 1px solid #213748; font-size: 13px; }
+.xor-training-weights { grid-row: span 2; }
+.xor-update-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.xor-update-grid > div { min-width: 0; border-right: 1px solid #213748; }
+.xor-update-grid > div:last-child { border-right: 0; }
+.xor-update-grid .tensor-heatmap-section { border-top: 0; }
+.xor-update-grid .tensor-view-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
+.xor-update-grid .tensor-heatmap-scroll { margin: 0 10px 12px; }
+.xor-update-grid .tensor-heatmap { grid-template-columns: minmax(48px, auto) repeat(var(--tensor-columns), minmax(25px, 1fr)); }
+.xor-update-grid .tensor-heatmap-cell { min-height: 31px; transition: background-color .22s ease; }
+.xor-training-loss { height: 230px; }
+.xor-decision-boundary { display: block; width: 100%; height: auto; background: #071019; }
+
 .xor-debug-panel { margin-bottom: 20px; }
 .xor-debug-body { padding: 20px; }
 .xor-debug-body > .notice { margin: 16px 0 0; }
@@ -341,7 +362,7 @@ textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; 
   .pagination { align-items: stretch; flex-direction: column; }
   .pagination-actions { justify-content: space-between; }
   .child-run-list li { align-items: flex-start; flex-direction: column; }
-  .detail-grid, .charts-grid { grid-template-columns: 1fr; }
+  .detail-grid, .charts-grid, .xor-training-views { grid-template-columns: 1fr; }
   .detail-grid .panel:last-child { grid-column: auto; }
   .log-heading { align-items: flex-start; flex-direction: column; }
   .log-controls { flex-wrap: wrap; }
@@ -353,6 +374,13 @@ textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; 
   .rerun-actions .button { flex: 1; }
   .control-actions .button { flex: 1 1 130px; }
   .delay-control { min-width: 100%; }
+  .xor-training-toolbar { grid-template-columns: 1fr 1fr; align-items: stretch; }
+  .xor-training-toolbar input[type="range"] { grid-column: 1 / -1; }
+  .xor-training-toolbar .mono-label { align-self: center; }
+  .xor-training-weights { grid-row: auto; }
+  .xor-update-grid { grid-template-columns: 1fr; }
+  .xor-update-grid > div { border-right: 0; border-bottom: 1px solid #213748; }
+  .xor-update-grid > div:last-child { border-bottom: 0; }
   #xor-debug-launch { align-items: stretch; flex-direction: column; }
   .xor-input-form { grid-template-columns: 1fr; }
   .xor-presets { grid-column: auto; }
