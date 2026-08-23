@@ -28,6 +28,11 @@ let xorSnapshot = null;
 let xorSnapshotLoading = false;
 let xorCanSetInput = false;
 let xorInputLoading = false;
+let modelDebugEventSeq = 0;
+let modelDebugSnapshot = null;
+let modelDebugSnapshotLoading = false;
+let modelDebugCanSetInput = false;
+let modelDebugInputLoading = false;
 let xorTrainingEventSeq = 0;
 let xorTrainingEvents = [];
 let xorTrainingIndex = -1;
@@ -534,7 +539,7 @@ function setupXorDebug(payload) {
   const session = document.querySelector("#xor-debug-session");
   const isXorRenderer = debugCapabilities(payload.config)?.renderer === "xor_neurons_v1";
   const artifactPaths = new Set((payload.artifacts || []).map(item => item.path));
-  const canStart = payload.config.experiment === "xor_backprop"
+  const canStart = payload.debug_adapter?.renderer === "xor_neurons_v1"
     && payload.manifest.status === "completed"
     && artifactPaths.has("model.json")
     && artifactPaths.has("checkpoint.pt");
@@ -545,6 +550,173 @@ function setupXorDebug(payload) {
     renderXorNetwork();
     loadXorEvents();
   }
+}
+
+function validateModelDebugSnapshot(snapshot) {
+  if (snapshot?.schema_version !== 1 || snapshot?.kind !== "model_debug_snapshot") {
+    throw new Error("неподдерживаемая версия model debug snapshot");
+  }
+  if (snapshot.run_id !== runId || !Number.isInteger(snapshot.seq) || snapshot.seq < 1) {
+    throw new Error("model debug snapshot принадлежит другому запуску");
+  }
+  const input = snapshot.input;
+  if (input?.mode !== "dataset_index" || !Number.isInteger(input.index)) {
+    throw new Error("model debug snapshot не содержит индекс датасета");
+  }
+  if (!Array.isArray(input.preview) || input.preview.length !== 28
+      || input.preview.some(row => !Array.isArray(row) || row.length !== 28)) {
+    throw new Error("preview входа должен иметь форму 28×28");
+  }
+  if (!Array.isArray(snapshot.layers)) throw new Error("layers должен быть массивом");
+}
+
+function renderModelInputPreview(snapshot) {
+  const canvas = document.querySelector("#model-input-preview");
+  const context = canvas.getContext("2d");
+  const preview = snapshot.input.preview;
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  const scaleX = canvas.width / 28;
+  const scaleY = canvas.height / 28;
+  preview.forEach((row, y) => row.forEach((raw, x) => {
+    const value = Math.max(0, Math.min(1, Number(raw) || 0));
+    const shade = Math.round(value * 255);
+    context.fillStyle = `rgb(${shade}, ${shade}, ${shade})`;
+    context.fillRect(x * scaleX, y * scaleY, Math.ceil(scaleX), Math.ceil(scaleY));
+  }));
+  const result = snapshot.prediction == null
+    ? ""
+    : ` · prediction ${snapshot.prediction}${snapshot.prediction === snapshot.input.label ? " ✓" : " ≠ label"}`;
+  document.querySelector("#model-input-meta").textContent =
+    `test[${snapshot.input.index}] · label ${snapshot.input.label}${result}`;
+}
+
+function tensorSummaryLine(tensor) {
+  const summary = tensor?.summary || {};
+  const shape = Array.isArray(tensor?.shape) ? tensor.shape.join(" × ") : "—";
+  return `${shape} · ${tensor?.dtype || "—"} · min ${formatValue(summary.min)} · max ${formatValue(summary.max)} · mean ${formatValue(summary.mean)} · std ${formatValue(summary.std)} · L2 ${formatValue(summary.l2_norm)} · sparsity ${summary.sparsity == null ? "—" : `${(summary.sparsity * 100).toFixed(1)}%`}`;
+}
+
+function renderModelModuleHierarchy(layers) {
+  const container = document.querySelector("#model-module-hierarchy");
+  container.replaceChildren();
+  if (!layers.length) {
+    container.append(node("p", "empty", "Нет завершённых слоёв."));
+    return;
+  }
+  const paths = new Set(["model"]);
+  layers.forEach(layer => {
+    let current = "model";
+    String(layer.module_path || layer.layer_id).split(".").forEach(part => {
+      current = `${current}.${part}`;
+      paths.add(current);
+    });
+  });
+  [...paths].forEach(path => {
+    const depth = path.split(".").length - 1;
+    const layer = layers.find(item => `model.${item.module_path}` === path);
+    const row = node("div", layer ? "module-tree-row module-tree-leaf" : "module-tree-row");
+    row.style.paddingLeft = `${depth * 18}px`;
+    row.append(node("span", "mono-label", path.split(".").at(-1)));
+    if (layer) row.append(node("span", "cell-sub", `${layer.layer_type} · ${layer.layer_id}`));
+    container.append(row);
+  });
+}
+
+function renderModelTensorFlow(snapshot) {
+  const container = document.querySelector("#model-tensor-flow");
+  container.replaceChildren();
+  if (!snapshot.layers.length) {
+    container.append(node("p", "empty", "Нет завершённых слоёв."));
+    return;
+  }
+  snapshot.layers.forEach((layer, index) => {
+    if (index) container.append(node("div", "tensor-flow-arrow", "↓"));
+    const card = node("article", "tensor-flow-layer");
+    const heading = node("div", "tensor-flow-heading");
+    heading.append(
+      node("strong", "", layer.layer_id),
+      node("span", "mono-label", layer.module_path),
+      node("span", "cell-sub", `${layer.layer_type} → ${layer.activation} · ${formatValue(layer.parameter_count)} параметров`),
+    );
+    card.append(heading);
+    for (const [label, tensor] of [
+      ["input", layer.input], ["z", layer.preactivation], ["post", layer.output],
+    ]) {
+      const row = node("div", "tensor-flow-tensor");
+      row.append(node("strong", "", label), node("span", "", tensorSummaryLine(tensor)));
+      card.append(row);
+    }
+    container.append(card);
+  });
+  if (snapshot.top_classes?.length) {
+    const top = node("div", "model-top-classes");
+    top.append(node("strong", "", "Top classes"));
+    snapshot.top_classes.forEach(item => {
+      top.append(node("span", "mono-label", `${item.class_index}: ${(item.probability * 100).toFixed(2)}%`));
+    });
+    container.append(top);
+  }
+}
+
+function renderModelDebugSnapshot(snapshot) {
+  modelDebugSnapshot = snapshot;
+  renderModelInputPreview(snapshot);
+  renderModelModuleHierarchy(snapshot.layers);
+  renderModelTensorFlow(snapshot);
+  const paused = currentControl?.requested_status === "paused";
+  const complete = snapshot.prediction != null;
+  showNotice("#model-debug-message", complete
+    ? `Forward завершён: prediction ${snapshot.prediction}, label ${snapshot.input.label}. Выберите следующий пример.`
+    : snapshot.layers.length
+      ? paused
+        ? `Завершено слоёв: ${snapshot.layers.length}. Нажмите «Один шаг» для следующего слоя.`
+        : `Завершено слоёв: ${snapshot.layers.length}. Вычисляем следующий слой…`
+      : paused
+        ? "Пример принят. Нажмите «Один шаг» для первого слоя."
+        : "Пример принят. Запускаем послойный forward…");
+  renderModelDebugInputControls();
+}
+
+async function loadModelDebugEvents() {
+  if (modelDebugSnapshotLoading || debugCapabilities(detail?.config)?.renderer !== "tensor_flow_v1") return;
+  modelDebugSnapshotLoading = true;
+  try {
+    const response = await fetch(`/api/runs/${encodedRunId}/events?after_seq=${modelDebugEventSeq}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || `API ответил ${response.status}`);
+    const event = [...(payload.items || [])].reverse().find(item => item.type === "model_debug" && item.snapshot);
+    if (event) {
+      const encodedPath = event.snapshot.split("/").map(encodeURIComponent).join("/");
+      const snapshotResponse = await fetch(`/api/runs/${encodedRunId}/artifacts/${encodedPath}`, { cache: "no-store" });
+      const snapshot = await snapshotResponse.json();
+      if (!snapshotResponse.ok) throw new Error(snapshot.detail || `API ответил ${snapshotResponse.status}`);
+      validateModelDebugSnapshot(snapshot);
+      renderModelDebugSnapshot(snapshot);
+    }
+    modelDebugEventSeq = payload.last_seq ?? modelDebugEventSeq;
+    showNotice("#model-debug-error", "");
+  } catch (error) {
+    showNotice("#model-debug-error", `Не удалось прочитать model debug snapshot: ${error.message}`);
+  } finally {
+    modelDebugSnapshotLoading = false;
+  }
+}
+
+function setupModelDebug(payload) {
+  const panel = document.querySelector("#model-debug-panel");
+  const launch = document.querySelector("#model-debug-launch");
+  const session = document.querySelector("#model-debug-session");
+  const renderer = debugCapabilities(payload.config)?.renderer;
+  const isTensorFlowRenderer = renderer === "tensor_flow_v1";
+  const artifactPaths = new Set((payload.artifacts || []).map(item => item.path));
+  const canStart = payload.debug_adapter?.renderer === "tensor_flow_v1"
+    && payload.manifest.status === "completed"
+    && artifactPaths.has("model.json")
+    && artifactPaths.has("checkpoint.pt");
+  panel.classList.toggle("hidden", !isTensorFlowRenderer && !canStart);
+  launch.classList.toggle("hidden", !canStart || isTensorFlowRenderer);
+  session.classList.toggle("hidden", !isTensorFlowRenderer);
+  if (isTensorFlowRenderer) loadModelDebugEvents();
 }
 
 function setupRunControl(payload) {
@@ -1143,6 +1315,7 @@ function renderDetail(payload) {
   setupRunControl(payload);
   setupXorTraining(payload);
   setupXorDebug(payload);
+  setupModelDebug(payload);
   const logPath = payload.manifest.artifacts.log || "run.log";
   const encodedLogPath = logPath.split("/").map(encodeURIComponent).join("/");
   document.querySelector("#download-log").href = `/api/runs/${encodedRunId}/artifacts/${encodedLogPath}`;
@@ -1178,6 +1351,22 @@ function renderXorInputControls() {
   });
 }
 
+function modelDebugForwardPending() {
+  const inputSeq = currentControl?.input_seq || 0;
+  if (!inputSeq) return false;
+  return !modelDebugSnapshot
+    || modelDebugSnapshot.input_command_seq < inputSeq
+    || (modelDebugSnapshot.input_command_seq === inputSeq && modelDebugSnapshot.prediction == null);
+}
+
+function renderModelDebugInputControls() {
+  const busy = modelDebugInputLoading || controlCommandLoading || modelDebugForwardPending();
+  const submit = document.querySelector("#model-set-example");
+  submit.disabled = busy || !modelDebugCanSetInput;
+  submit.textContent = modelDebugInputLoading ? "Выбираем…" : "Выбрать пример";
+  submit.setAttribute("aria-busy", modelDebugInputLoading ? "true" : "false");
+}
+
 function renderControl(control) {
   currentControl = control;
   const available = new Set(control.available_commands || []);
@@ -1186,7 +1375,9 @@ function renderControl(control) {
   });
   const delay = document.querySelector("#delay-ms");
   xorCanSetInput = available.has("set_input");
+  modelDebugCanSetInput = available.has("set_input");
   renderXorInputControls();
+  renderModelDebugInputControls();
   if (document.activeElement !== delay) delay.value = String(control.delay_ms ?? 0);
   const actual = statusNames[control.status] || control.status;
   const requested = statusNames[control.requested_status] || control.requested_status;
@@ -1278,6 +1469,56 @@ async function startXorDebug() {
     showNotice("#xor-debug-error", error.message);
     button.disabled = false;
     button.textContent = "Открыть отладочную сессию";
+  }
+}
+
+async function startModelDebug() {
+  const button = document.querySelector("#start-model-debug");
+  button.disabled = true;
+  button.textContent = "Создаём сессию…";
+  try {
+    const response = await fetch(`/api/runs/${encodedRunId}/debug`, { method: "POST" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || `API ответил ${response.status}`);
+    window.location.assign(payload.location);
+  } catch (error) {
+    showNotice("#model-debug-error", error.message);
+    button.disabled = false;
+    button.textContent = "Открыть инспекцию модели";
+  }
+}
+
+async function submitModelExample() {
+  const value = Number(document.querySelector("#model-example-index").value);
+  const debug = debugCapabilities(detail?.config) || {};
+  const minimum = Number.isInteger(debug.input_min) ? debug.input_min : 0;
+  const maximum = Number.isInteger(debug.input_max) ? debug.input_max : 9999;
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    showNotice("#model-debug-error", `Индекс примера должен быть целым от ${minimum} до ${maximum}.`);
+    return;
+  }
+  if (!modelDebugCanSetInput) {
+    showNotice("#model-debug-error", "Выбор примера сейчас недоступен: сессия завершена или отменяется.");
+    return;
+  }
+  if (modelDebugForwardPending()) {
+    showNotice("#model-debug-error", "Сначала завершите текущий forward: «Продолжить» или «Один шаг».");
+    return;
+  }
+  if (modelDebugInputLoading) return;
+  modelDebugInputLoading = true;
+  renderModelDebugInputControls();
+  try {
+    if (await issueControl("set_input", null, [value])) {
+      showNotice("#model-debug-error", "");
+      showNotice("#model-debug-message", currentControl?.requested_status === "paused"
+        ? "Пример передан. Нажмите «Один шаг» для первого слоя."
+        : "Пример передан. Запускаем forward…");
+      await loadModelDebugEvents();
+    }
+  } finally {
+    modelDebugInputLoading = false;
+    renderModelDebugInputControls();
   }
 }
 
@@ -1460,6 +1701,7 @@ async function loadRerunPreview() {
 }
 
 document.querySelector("#start-xor-debug").addEventListener("click", startXorDebug);
+document.querySelector("#start-model-debug").addEventListener("click", startModelDebug);
 document.querySelector("#xor-training-prev").addEventListener("click", () => {
   stopXorTrainingPlayback();
   selectXorTrainingFrame(xorTrainingIndex - 1);
@@ -1489,6 +1731,10 @@ setInterval(renewActivity, 15000);
 document.querySelector("#xor-input-form").addEventListener("submit", event => {
   event.preventDefault();
   submitXorInput();
+});
+document.querySelector("#model-example-form").addEventListener("submit", event => {
+  event.preventDefault();
+  submitModelExample();
 });
 document.querySelectorAll("[data-xor-input]").forEach(button => {
   button.addEventListener("click", () => {
@@ -1578,6 +1824,7 @@ setInterval(() => {
   if (!detail || !terminalStatuses.has(detail.manifest.status)) loadControl();
 }, 1000);
 setInterval(loadXorEvents, 500);
+setInterval(loadModelDebugEvents, 500);
 setInterval(loadXorTrainingEvents, 500);
 fetchDetail();
 loadControl();

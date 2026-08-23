@@ -35,9 +35,10 @@ from bioplast.viz.control import (
     RunControlValidationError,
 )
 from bioplast.viz.debug import (
-    XorDebugConflict,
-    XorDebugService,
-    XorDebugSubmissionError,
+    DebugSessionConflict,
+    DebugSessionService,
+    DebugSessionSubmissionError,
+    debug_adapter_metadata,
 )
 from bioplast.viz.deletion import (
     RunDeletionConflict,
@@ -90,7 +91,7 @@ def create_app(
     )
     reruns = RerunService(repository, scheduler)
     controls = RunControlService(repository, scheduler)
-    xor_debug = XorDebugService(repository, scheduler)
+    debug_sessions = DebugSessionService(repository, scheduler)
     deletion = RunDeletionService(repository)
     viz_dir = Path(__file__).resolve().parent
     templates = Jinja2Templates(directory=viz_dir / "templates")
@@ -115,7 +116,7 @@ def create_app(
     app.state.run_scheduler = scheduler
     app.state.rerun_service = reruns
     app.state.run_control_service = controls
-    app.state.xor_debug_service = xor_debug
+    app.state.debug_session_service = debug_sessions
     app.state.run_deletion_service = deletion
     app.mount("/static", StaticFiles(directory=viz_dir / "static"), name="static")
 
@@ -165,15 +166,15 @@ def create_app(
     ) -> JSONResponse:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
 
-    @app.exception_handler(XorDebugConflict)
-    async def xor_debug_conflict_handler(
-        _request: Request, exc: XorDebugConflict
+    @app.exception_handler(DebugSessionConflict)
+    async def debug_session_conflict_handler(
+        _request: Request, exc: DebugSessionConflict
     ) -> JSONResponse:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
 
-    @app.exception_handler(XorDebugSubmissionError)
-    async def xor_debug_submission_handler(
-        _request: Request, exc: XorDebugSubmissionError
+    @app.exception_handler(DebugSessionSubmissionError)
+    async def debug_session_submission_handler(
+        _request: Request, exc: DebugSessionSubmissionError
     ) -> JSONResponse:
         return JSONResponse(status_code=503, content={"detail": str(exc)})
 
@@ -272,7 +273,9 @@ def create_app(
 
     @app.get("/api/runs/{run_id}")
     def get_run(run_id: str) -> dict:
-        return repository.get_run(run_id)
+        payload = repository.get_run(run_id)
+        payload["debug_adapter"] = debug_adapter_metadata(payload["config"])
+        return payload
 
     @app.delete("/api/runs/{run_id}")
     def delete_run(run_id: str) -> dict[str, object]:
@@ -294,8 +297,8 @@ def create_app(
         return reruns.enqueue(run_id, request.config)
 
     @app.post("/api/runs/{run_id}/debug", status_code=202)
-    def start_xor_debug(run_id: str) -> dict[str, Any]:
-        return xor_debug.start(run_id)
+    def start_debug_session(run_id: str) -> dict[str, Any]:
+        return debug_sessions.start(run_id)
 
     @app.get("/api/runs/{run_id}/control")
     def get_run_control(run_id: str) -> dict[str, Any]:

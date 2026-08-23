@@ -87,6 +87,13 @@ from bioplast.runner.snapshots import (
     write_xor_forward_snapshot,
     write_xor_train_step_snapshot,
 )
+from bioplast.runner.model_debug import (
+    ModelDebugClassScore,
+    ModelDebugLayerSnapshot,
+    ModelDebugSnapshot,
+    load_model_debug_snapshot,
+    write_model_debug_snapshot,
+)
 
 __all__ = [
     "CONTRACT_VERSION",
@@ -102,6 +109,9 @@ __all__ = [
     "LIFECYCLE_VERSION",
     "ModelManifest",
     "ModelArtifacts",
+    "ModelDebugClassScore",
+    "ModelDebugLayerSnapshot",
+    "ModelDebugSnapshot",
     "RunEvent",
     "RunCancelled",
     "RunCommand",
@@ -134,6 +144,7 @@ __all__ = [
     "inspect_tensor",
     "iter_events",
     "load_model_manifest",
+    "load_model_debug_snapshot",
     "load_activity",
     "load_recovery",
     "load_recovery_state",
@@ -156,6 +167,7 @@ __all__ = [
     "utc_offset_iso",
     "validate_run_config",
     "write_model_manifest",
+    "write_model_debug_snapshot",
     "write_recovery",
     "write_run_manifest",
     "write_training_checkpoint",

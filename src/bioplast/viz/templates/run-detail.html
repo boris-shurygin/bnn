@@ -143,6 +143,47 @@
   </div>
 </section>
 
+<section id="model-debug-panel" class="panel model-debug-panel hidden" aria-labelledby="model-debug-heading">
+  <div class="panel-heading">
+    <div>
+      <h2 id="model-debug-heading">Инспекция большой модели</h2>
+      <p>Выбор примера, послойный поток тензоров и агрегаты активаций без передачи полных весов.</p>
+    </div>
+    <span class="mono-label">model_debug_snapshot</span>
+  </div>
+  <div class="model-debug-body">
+    <div id="model-debug-launch" class="hidden">
+      <p>Создайте дочернюю debug-сессию: checkpoint загрузит отдельный worker, исходный прогон не изменится.</p>
+      <button id="start-model-debug" class="button button-primary" type="button">Открыть инспекцию модели</button>
+    </div>
+    <div id="model-debug-session" class="hidden">
+      <form id="model-example-form" class="model-example-form">
+        <label>Индекс test-примера
+          <input id="model-example-index" type="number" min="0" max="9999" step="1" value="0">
+        </label>
+        <button id="model-set-example" class="button button-primary" type="submit">Выбрать пример</button>
+      </form>
+      <div id="model-debug-message" class="notice notice-info">Выберите тестовый пример. Для послойного режима сначала нажмите «Пауза».</div>
+      <div class="model-debug-grid">
+        <article class="model-input-card">
+          <h3>Вход MNIST</h3>
+          <canvas id="model-input-preview" width="280" height="280" aria-label="Выбранная цифра MNIST"></canvas>
+          <div id="model-input-meta" class="cell-sub">Snapshot ещё не создан.</div>
+        </article>
+        <article>
+          <h3>Иерархия модулей</h3>
+          <div id="model-module-hierarchy" class="model-module-hierarchy"><p class="empty">Нет завершённых слоёв.</p></div>
+        </article>
+      </div>
+      <article class="model-flow-card">
+        <h3>Поток тензоров и агрегаты</h3>
+        <div id="model-tensor-flow" class="model-tensor-flow"><p class="empty">Нет завершённых слоёв.</p></div>
+      </article>
+    </div>
+    <div id="model-debug-error" class="notice notice-error hidden" role="alert"></div>
+  </div>
+</section>
+
 <section class="detail-grid">
   <article class="panel">
     <div class="panel-heading"><h2>Параметры</h2><span class="mono-label">config.json</span></div>
@@ -229,4 +270,4 @@
   <div id="artifact-list" class="artifact-list"><p class="empty">Загрузка…</p></div>
 </section>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', path='/run-detail.js') }}?v=20260821-v12" defer></script>{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', path='/run-detail.js') }}?v=20260822-v13" defer></script>{% endblock %}

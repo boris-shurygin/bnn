@@ -17,6 +17,10 @@ backprop-XOR/MNIST создаёт новый main attempt, а не debug worker,
 V.12 добавила события `xor_train_step` и JSON-снимки точного обновления
 backprop-XOR. Они читаются существующими маршрутами events/artifacts; новый
 endpoint и отдельный путь исполнения не понадобились.
+V.13 заменила специальную фабрику XOR allowlist-реестром debug-адаптеров.
+Тот же `POST .../debug` теперь выбирает зарегистрированный adapter для
+`xor_backprop` или `mnist_mlp_backprop`; detail response сообщает
+`debug_adapter`, чтобы UI показывал подходящую кнопку и renderer capability.
 
 Запуск из корня проекта:
 
@@ -58,7 +62,7 @@ shutdown задаются переменными из [`worker-lifecycle.md`](wo
 | `DELETE /api/runs/{id}` | Удалить один терминальный запуск |
 | `GET /api/runs/{id}/rerun` | Конфиг и политика редактируемых/зафиксированных полей |
 | `POST /api/runs/{id}/rerun` | Создать queued-копию и поставить её в ProcessPoolExecutor |
-| `POST /api/runs/{id}/debug` | Создать running-дочернюю сессию XOR-forward из checkpoint |
+| `POST /api/runs/{id}/debug` | Создать дочернюю debug-сессию через зарегистрированный adapter исходной модели |
 | `GET /api/runs/{id}/control` | Фактический/requested статус, задержка и доступные команды |
 | `POST /api/runs/{id}/control` | Добавить типизированную команду управления активным запуском |
 | `POST /api/runs/{id}/activity` | Продлить activity lease видимой debug-сессии после взаимодействия пользователя |
@@ -203,16 +207,21 @@ Python. Для обучения это шаг XOR или batch MNIST. В `xor_in
 терминальный контракт. Running-задача завершается кооперативно в worker, поэтому
 API не убивает дерево процессов посреди обновления весов.
 
-В V.9 `POST /api/runs/{id}/debug` имеет реализованный адаптер только для
-завершённого `xor_backprop` с
-`model.json` и `checkpoint.pt`. Сервер резервирует новый каталог, записывает
+Начиная с V.13 `POST /api/runs/{id}/debug` выбирает adapter из статического
+allowlist по паре `experiment/dataset`. Реализованы завершённые `xor_backprop`
+и `mnist_mlp_backprop` с `model.json` и `checkpoint.pt`; неизвестная пара
+возвращает 409 и не может выбрать произвольный Python-модуль. Сервер резервирует
+новый каталог, записывает
 `parent_run_id`, копирует малый инспекционный manifest с новым `run_id`, заранее
 передаёт сессию debug-очереди supervisor в непрерывном режиме. Для послойного forward
 пользователь сначала отправляет `pause`. Сам checkpoint читает
 только дочерний worker. Ответ `202 Accepted` содержит URL новой карточки.
-Ограничение относится к набору реализованных адаптеров, а не к общему
-debug-протоколу: другие модели подключаются собственным loader/input adapter и
-renderer без изменения машины управления.
+
+XOR adapter использует renderer `xor_neurons_v1` и ручной вектор из двух чисел.
+MNIST adapter использует `tensor_flow_v1`, принимает один целый индекс test-набора
+в диапазоне 0–9999 и выполняет MLP по одному слою. Другие модели подключаются
+новой записью registry с собственным loader/input adapter и renderer без
+изменения машины управления или HTTP-маршрута.
 
 `GET /api/runs/{id}/events?after_seq=N` возвращает только события с большим
 монотонным номером и `last_seq`. Событие `xor_forward` ссылается на JSON snapshot
@@ -224,6 +233,12 @@ accuracy и признак update. Его snapshot хранит `before/delta/af
 сетку границы решений. При ручном `step` кадр создаётся всегда; непрерывный
 прогон может разрежать кадры через `snapshot_every_steps` без изменения числа
 самих обучающих операций.
+
+Событие `model_debug` V.13 также читается тем же маршрутом. JSON snapshot
+содержит preview выбранного MNIST-примера, истинную метку, завершённые
+`module_path`, tensor summary входа/предактивации/выхода каждого слоя и top-3
+финального softmax. Полные веса, весь датасет и живые worker-тензоры API не
+получает.
 
 ## Граница безопасности
 

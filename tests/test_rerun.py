@@ -75,6 +75,26 @@ def test_rerun_preview_marks_parameters_and_paths_explicitly(tmp_path):
     assert fields["data_root"]["editable"] is False
 
 
+def test_rerun_locks_debug_session_source_run(tmp_path):
+    runs_dir, run_id, run_dir, config = _source_run(tmp_path)
+    debug_config = {**config, "source_run_id": "trusted-source-run"}
+    (run_dir / "config.json").write_text(
+        json.dumps(debug_config, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    client = TestClient(create_app(runs_dir, scheduler=RecordingScheduler()))
+
+    preview = client.get(f"/api/runs/{run_id}/rerun")
+    changed_source = client.post(
+        f"/api/runs/{run_id}/rerun",
+        json={"config": {**debug_config, "source_run_id": "other-run"}},
+    )
+
+    fields = {item["key"]: item for item in preview.json()["fields"]}
+    assert preview.status_code == 200
+    assert fields["source_run_id"]["editable"] is False
+    assert changed_source.status_code == 422
+
+
 def test_rerun_reserves_queued_child_and_preserves_source(tmp_path):
     runs_dir, run_id, source_dir, config = _source_run(tmp_path)
     original_config = (source_dir / "config.json").read_bytes()

@@ -162,6 +162,29 @@ def test_detail_page_contains_interactive_xor_controls_and_neuron_graph(tmp_path
     assert ".xor-neuron-active" in css.text
 
 
+def test_detail_page_contains_capability_driven_mnist_tensor_flow(tmp_path):
+    client, run_id = _client(tmp_path)
+
+    page = client.get(f"/runs/{run_id}")
+    script = client.get("/static/run-detail.js")
+    css = client.get("/static/app.css")
+
+    assert "Инспекция большой модели" in page.text
+    assert 'id="start-model-debug"' in page.text
+    assert 'id="model-example-index"' in page.text
+    assert 'id="model-input-preview"' in page.text
+    assert 'id="model-module-hierarchy"' in page.text
+    assert 'id="model-tensor-flow"' in page.text
+    assert 'renderer === "tensor_flow_v1"' in script.text
+    assert "payload.debug_adapter?.renderer" in script.text
+    assert "validateModelDebugSnapshot" in script.text
+    assert "renderModelModuleHierarchy" in script.text
+    assert "renderModelTensorFlow" in script.text
+    assert 'issueControl("set_input", null, [value])' in script.text
+    assert ".model-debug-grid" in css.text
+    assert ".tensor-flow-layer" in css.text
+
+
 def test_detail_page_contains_xor_training_step_animation(tmp_path):
     client, run_id = _client(tmp_path)
 

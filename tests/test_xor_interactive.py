@@ -69,11 +69,14 @@ def test_debug_api_creates_running_child_and_accepts_manual_input(tmp_path):
     assert config["experiment"] == "xor_interactive"
     assert config["debug"] == {
         "protocol": "model_debug_v1",
+        "adapter": "xor_interactive_v1",
         "renderer": "xor_neurons_v1",
         "accepts_input": True,
+        "input_mode": "manual_vector",
         "input_size": 2,
         "supports_step": True,
         "step_scope": "layer",
+        "views": ["neurons", "tensor_summary"],
     }
     assert load_model_manifest(child).run_id == child.name
     assert read_run_commands(child) == []

@@ -76,13 +76,18 @@ optimizer, пример аргументов forward, имена/активац�
 `model.json` с собственным `run_id`; полный checkpoint остаётся у родителя и не
 десериализуется API-процессом.
 
-`xor_interactive` — первый адаптер общего debug-протокола, а не ограничение
-отладки моделью XOR. Дочерний конфиг объявляет объект `debug` с полями
-`protocol: model_debug_v1`, `renderer`, `accepts_input`, `input_size`, `supports_step` и
-`step_scope`. Общие команды, события и snapshots выбираются по capabilities;
-renderer определяет только представление данных. Сейчас реализован
-`xor_neurons_v1`; будущие модели используют тот же протокол с другими renderer
-и формами входа.
+V.13 заменяет специальную фабрику XOR статическим allowlist-реестром
+debug-адаптеров. Сейчас он сопоставляет `xor_backprop → xor_interactive` и
+`mnist_mlp_backprop → mnist_interactive`; произвольное имя experiment из
+браузера по-прежнему выбрать нельзя. `xor_interactive` остаётся первым
+адаптером общего debug-протокола, а не ограничением отладки моделью XOR.
+Дочерний конфиг объявляет объект `debug` с полями
+`protocol: model_debug_v1`, `renderer`, `accepts_input`, `input_size`,
+`supports_step` и `step_scope`, а также adapter-specific `input_mode`, границы и
+список `views`. Общие команды, события и snapshots выбираются по capabilities;
+renderer определяет только представление данных. Реализованы
+`xor_neurons_v1` и `tensor_flow_v1`; второй принимает индекс MNIST
+test-примера и не передаёт полные большие тензоры.
 
 ## `run.json`
 
@@ -218,6 +223,32 @@ training recovery публикует `last_event_seq`. Если процесс �
 окне, восстановленный детерминированный шаг обязан совпасть с уже сохранённым
 payload; существующее событие переиспользуется, а не дублируется.
 
+## Aggregate model-debug snapshots
+
+V.13 добавляет общий `kind: model_debug_snapshot` и событие
+`type: model_debug` для renderer больших моделей. Вход описывается типизированно:
+для MNIST это `mode: dataset_index`, индекс test-примера, истинная метка, форма
+`1×28×28` и preview единственного выбранного изображения. Preview допустим
+целиком, потому что это 784 ограниченных значения одного наблюдения, а не поток
+весов или датасет.
+
+После каждой атомарной фазы `forward_layer` snapshot содержит все уже
+завершённые слои. Запись слоя включает стабильный `layer_id`, полный
+`module_path`, тип, activation, число параметров и три `TensorSpec`:
+`activation_input`, `preactivation` и `activation_output`. Эти тензоры всегда
+имеют `value_mode: summary`: форма, dtype, число finite/non-finite, min/max,
+mean/std, L1/L2 и sparsity. Полные активации и параметры в snapshot не
+встраиваются. `module_path` позволяет renderer построить иерархию, а порядок
+слоёв — поток тензоров без полного графа нейронов.
+
+Последний слой дополнительно публикует prediction и top-3 softmax-класса.
+Worker загружает родительский checkpoint и MNIST внутри собственного процесса;
+API видит только исходный `model.json`, allowlist adapter и дочерний конфиг.
+Snapshot записывается атомарно перед append-only событием, recovery хранит
+event cursor и завершённые агрегаты. После crash-window adapter дочитывает
+хвост событий и детерминированно пересчитывает нужную промежуточную активацию
+из выбранного входа, не сохраняя полный tensor в JSON.
+
 ## `checkpoint.pt`
 
 Бинарный checkpoint версии 1 предназначен для inference и продолжения обучения.
@@ -245,8 +276,9 @@ Checkpoint читается с `torch.load(..., weights_only=True, map_location=
 Одна строка — одно событие с `run_id`, монотонным `seq`, временем `occurred_at`,
 `type`, опциональными `step`, `phase`, `layer_id`, скалярами и сообщением.
 Большие значения в JSON не встраиваются: поле `snapshot` содержит относительную
-ссылку на `snapshots/<seq>.json` для малого XOR payload или на будущий
-`snapshots/<seq>.npz` для большого тензора. Запись завершается переводом строки и `flush`,
+ссылку на `snapshots/<seq>.json` для малого XOR payload или агрегированного
+model-debug payload; будущий выбранный большой tensor может использовать
+`snapshots/<seq>.npz`. Запись завершается переводом строки и `flush`,
 поэтому тот же файл можно читать после завершения и показывать через live-tail.
 
 ## `commands.jsonl`
@@ -257,8 +289,9 @@ worker. Каждая полная строка содержит `schema_version`
 command-specific поля. Допустимые команды: `pause`, `resume`, `step`,
 `set_delay`, `set_input`, `cancel`. `delay_ms` разрешён только для `set_delay` и
 лежит в диапазоне 0–60000. `input_values` разрешён только для `set_input`; общий
-контракт принимает конечный числовой вектор, а сервис V.9 дополнительно требует
-ровно два значения для XOR.
+контракт принимает конечный числовой вектор. Сервис сверяет его с capabilities:
+V.9 требует ровно два значения для XOR, а V.13 — один целый индекс MNIST в
+объявленном диапазоне.
 
 API — единственный писатель журнала внутри приложения; строка дописывается под
 lock, завершается `\n`, затем выполняются `flush` и `fsync`. Worker не изменяет

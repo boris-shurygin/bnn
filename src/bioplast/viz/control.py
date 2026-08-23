@@ -184,6 +184,37 @@ class RunControlService:
                     raise RunControlValidationError(
                         f"debug-сессия требует {expected_input_size} конечных input_values"
                     )
+                if isinstance(debug, dict) and debug.get("input_integer") is True and any(
+                    not float(value).is_integer() for value in input_values
+                ):
+                    raise RunControlValidationError(
+                        "debug-сессия требует целые input_values"
+                    )
+                if isinstance(debug, dict):
+                    minimum = debug.get("input_min")
+                    maximum = debug.get("input_max")
+                    if (
+                        minimum is not None
+                        and (
+                            isinstance(minimum, bool)
+                            or not isinstance(minimum, (int, float))
+                            or any(float(value) < float(minimum) for value in input_values)
+                        )
+                    ):
+                        raise RunControlValidationError(
+                            f"input_values должны быть не меньше {minimum}"
+                        )
+                    if (
+                        maximum is not None
+                        and (
+                            isinstance(maximum, bool)
+                            or not isinstance(maximum, (int, float))
+                            or any(float(value) > float(maximum) for value in input_values)
+                        )
+                    ):
+                        raise RunControlValidationError(
+                            f"input_values должны быть не больше {maximum}"
+                        )
             elif delay_ms is not None:
                 raise RunControlValidationError(
                     "delay_ms допустим только для команды set_delay"
