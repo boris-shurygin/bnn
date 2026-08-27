@@ -23,6 +23,11 @@ let modelSignature = "";
 let modelLoadToken = 0;
 let selectedLayerId = null;
 const selectedTensorByLayer = new Map();
+let neuronVisualizationSignature = "";
+let neuronVisualizationLoadToken = 0;
+let neuronVisualizations = null;
+let neuronVisualizationError = "";
+const selectedNeuronByLayer = new Map();
 let xorEventSeq = 0;
 let xorSnapshot = null;
 let xorSnapshotLoading = false;
@@ -318,6 +323,47 @@ function validateModelPayload(payload) {
   }
 }
 
+function validateNeuronVisualizations(payload) {
+  if (!payload || payload.schema_version !== 1 || payload.kind !== "neuron_visualizations") {
+    throw new Error("Поддерживается только neuron_visualizations версии 1.");
+  }
+  if (payload.run_id !== runId) {
+    throw new Error(`Neuron visualizations принадлежит другому запуску: ${payload.run_id || "—"}`);
+  }
+  if (!Array.isArray(payload.input_shape) || payload.input_shape.length !== 2
+      || payload.input_shape.some(value => !Number.isInteger(value) || value < 1)) {
+    throw new Error("Neuron visualizations требует двумерный input_shape.");
+  }
+  if (!Array.isArray(payload.layers)) throw new Error("Neuron visualizations не содержит layers.");
+  const layerIds = new Set();
+  for (const layer of payload.layers) {
+    if (!layer || typeof layer.layer_id !== "string" || !layer.layer_id
+        || layerIds.has(layer.layer_id)) {
+      throw new Error("Neuron visualizations содержит пустой или повторяющийся layer_id.");
+    }
+    layerIds.add(layer.layer_id);
+    if (!["input_filter", "max_dataset_example"].includes(layer.mode)
+        || !Number.isInteger(layer.neuron_count) || layer.neuron_count < 1
+        || !Array.isArray(layer.images) || layer.images.length !== layer.neuron_count) {
+      throw new Error(`Некорректные изображения нейронов слоя ${layer.layer_id}.`);
+    }
+    for (const image of layer.images) {
+      if (!Array.isArray(image) || image.length !== payload.input_shape[0]
+          || image.some(row => !Array.isArray(row) || row.length !== payload.input_shape[1]
+            || row.some(value => typeof value !== "number" || !Number.isFinite(value)))) {
+        throw new Error(`Изображение нейрона слоя ${layer.layer_id} не совпадает с input_shape.`);
+      }
+    }
+    if (layer.mode === "max_dataset_example"
+        && (!Array.isArray(layer.source_indices)
+          || layer.source_indices.length !== layer.neuron_count
+          || !Array.isArray(layer.activation_values)
+          || layer.activation_values.length !== layer.neuron_count)) {
+      throw new Error(`Слой ${layer.layer_id} не содержит максимум для каждого нейрона.`);
+    }
+  }
+}
+
 function setModelState(message, kind = "empty") {
   const state = document.querySelector("#model-state");
   state.replaceChildren();
@@ -344,6 +390,20 @@ function modelNode(layer) {
     renderSelectedLayer(currentModel);
   });
   return button;
+}
+
+function modelInputNode(model) {
+  const firstLayer = model.layers[0];
+  const shape = Array.isArray(firstLayer?.input_shape) ? firstLayer.input_shape.slice(1) : [];
+  const input = node("div", "model-node model-input-node");
+  input.setAttribute("aria-label", "Вход модели");
+  input.append(
+    node("span", "model-node-id", "input"),
+    node("strong", "model-node-type", "Вход"),
+    node("span", "model-node-shape", shape.length ? formatShape(shape) : "форма не сохранена"),
+    node("span", "model-node-params", "данные без параметров"),
+  );
+  return input;
 }
 
 let currentModel = null;
@@ -590,17 +650,56 @@ function renderModelInputPreview(snapshot) {
     `test[${snapshot.input.index}] · label ${snapshot.input.label}${result}`;
 }
 
-function tensorSummaryLine(tensor) {
+function tensorSummaryValues(tensor) {
   const summary = tensor?.summary || {};
   const shape = Array.isArray(tensor?.shape) ? tensor.shape.join(" × ") : "—";
-  return `${shape} · ${tensor?.dtype || "—"} · min ${formatValue(summary.min)} · max ${formatValue(summary.max)} · mean ${formatValue(summary.mean)} · std ${formatValue(summary.std)} · L2 ${formatValue(summary.l2_norm)} · sparsity ${summary.sparsity == null ? "—" : `${(summary.sparsity * 100).toFixed(1)}%`}`;
+  return [
+    shape,
+    tensor?.dtype || "—",
+    formatValue(summary.min),
+    formatValue(summary.max),
+    formatValue(summary.mean),
+    formatValue(summary.std),
+    formatValue(summary.l2_norm),
+    summary.sparsity == null ? "—" : `${(summary.sparsity * 100).toFixed(1)}%`,
+  ];
+}
+
+function renderTensorFlowTable(layer) {
+  const scroll = node("div", "tensor-flow-table-scroll");
+  scroll.setAttribute("role", "region");
+  scroll.setAttribute("aria-label", `Агрегаты тензоров слоя ${layer.layer_id}`);
+  scroll.tabIndex = 0;
+
+  const table = node("table", "tensor-flow-table");
+  const head = node("thead", "");
+  const headRow = node("tr", "");
+  ["тензор", "форма", "dtype", "min", "max", "mean", "std", "L2", "sparsity"].forEach(label => {
+    headRow.append(node("th", "", label));
+  });
+  head.append(headRow);
+
+  const body = node("tbody", "");
+  for (const [label, tensor] of [
+    ["input", layer.input], ["z", layer.preactivation], ["post", layer.output],
+  ]) {
+    const row = node("tr", "");
+    row.append(node("th", "tensor-flow-name", label));
+    tensorSummaryValues(tensor).forEach(value => row.append(node("td", "", value)));
+    body.append(row);
+  }
+  table.append(head, body);
+  scroll.append(table);
+  return scroll;
 }
 
 function renderModelModuleHierarchy(layers) {
   const container = document.querySelector("#model-module-hierarchy");
+  const card = document.querySelector("#model-module-card");
   container.replaceChildren();
-  if (!layers.length) {
-    container.append(node("p", "empty", "Нет завершённых слоёв."));
+  const nested = layers.some(layer => String(layer.module_path || "").split(".").length > 2);
+  card.classList.toggle("hidden", !nested);
+  if (!nested) {
     return;
   }
   const paths = new Set(["model"]);
@@ -638,14 +737,7 @@ function renderModelTensorFlow(snapshot) {
       node("span", "mono-label", layer.module_path),
       node("span", "cell-sub", `${layer.layer_type} → ${layer.activation} · ${formatValue(layer.parameter_count)} параметров`),
     );
-    card.append(heading);
-    for (const [label, tensor] of [
-      ["input", layer.input], ["z", layer.preactivation], ["post", layer.output],
-    ]) {
-      const row = node("div", "tensor-flow-tensor");
-      row.append(node("strong", "", label), node("span", "", tensorSummaryLine(tensor)));
-      card.append(row);
-    }
+    card.append(heading, renderTensorFlowTable(layer));
     container.append(card);
   });
   if (snapshot.top_classes?.length) {
@@ -663,6 +755,7 @@ function renderModelDebugSnapshot(snapshot) {
   renderModelInputPreview(snapshot);
   renderModelModuleHierarchy(snapshot.layers);
   renderModelTensorFlow(snapshot);
+  if (currentModel) renderSelectedLayer(currentModel);
   const paused = currentControl?.requested_status === "paused";
   const complete = snapshot.prediction != null;
   showNotice("#model-debug-message", complete
@@ -704,8 +797,11 @@ async function loadModelDebugEvents() {
 
 function setupModelDebug(payload) {
   const panel = document.querySelector("#model-debug-panel");
+  const flowPanel = document.querySelector("#model-flow-panel");
   const launch = document.querySelector("#model-debug-launch");
   const session = document.querySelector("#model-debug-session");
+  const selectedInput = document.querySelector("#model-selected-input");
+  const selectionWorkspace = document.querySelector("#model-selection-workspace");
   const renderer = debugCapabilities(payload.config)?.renderer;
   const isTensorFlowRenderer = renderer === "tensor_flow_v1";
   const artifactPaths = new Set((payload.artifacts || []).map(item => item.path));
@@ -714,8 +810,11 @@ function setupModelDebug(payload) {
     && artifactPaths.has("model.json")
     && artifactPaths.has("checkpoint.pt");
   panel.classList.toggle("hidden", !isTensorFlowRenderer && !canStart);
+  flowPanel.classList.toggle("hidden", !isTensorFlowRenderer);
   launch.classList.toggle("hidden", !canStart || isTensorFlowRenderer);
   session.classList.toggle("hidden", !isTensorFlowRenderer);
+  selectedInput.classList.toggle("hidden", !isTensorFlowRenderer);
+  selectionWorkspace.classList.toggle("model-selection-with-input", isTensorFlowRenderer);
   if (isTensorFlowRenderer) loadModelDebugEvents();
 }
 
@@ -744,8 +843,13 @@ function renderModelFacts(model, config) {
 function renderModelGraph(model) {
   const graph = document.querySelector("#model-graph");
   graph.replaceChildren();
+  graph.append(modelInputNode(model));
   model.layers.forEach((layer, index) => {
-    if (index) {
+    if (!index) {
+      const edge = node("div", "model-edge model-edge-forward");
+      edge.append(node("span", "model-edge-arrow", "→"), node("small", "", "данные"));
+      graph.append(edge);
+    } else {
       const previous = model.layers[index - 1];
       const connection = model.connections.find(item =>
         item.source === previous.id && item.target === layer.id);
@@ -1180,6 +1284,152 @@ function renderTensor(layer, tensor, container) {
   container.append(valuesHeading, renderTensorTable(tensor, rows), renderTensorHeatmap(tensor, rows));
 }
 
+function layerActivationValues(layerId) {
+  const snapshotLayer = modelDebugSnapshot?.layers?.find(item => item.layer_id === layerId);
+  const values = snapshotLayer?.output?.values;
+  return Array.isArray(values) && values.length === 1 && Array.isArray(values[0])
+    ? values[0] : null;
+}
+
+function drawNeuronImage(canvas, image, mode) {
+  const height = image.length;
+  const width = image[0].length;
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  const maximum = Math.max(0, ...image.flat().map(Math.abs));
+  image.forEach((row, y) => row.forEach((value, x) => {
+    if (mode === "input_filter") {
+      context.fillStyle = heatColor(value, maximum);
+    } else {
+      const shade = Math.round(255 * Math.max(0, Math.min(1, value)));
+      context.fillStyle = `rgb(${shade}, ${shade}, ${shade})`;
+    }
+    context.fillRect(x, y, 1, 1);
+  }));
+}
+
+function neuronImageStats(image) {
+  const values = image.flat();
+  return {
+    minimum: Math.min(...values),
+    maximum: Math.max(...values),
+    sum: values.reduce((total, value) => total + value, 0),
+  };
+}
+
+function neuronImageCard(image, mode, title, description, ariaLabel) {
+  const card = node("div", "neuron-image-card");
+  const canvas = node("canvas", "neuron-image-canvas");
+  canvas.setAttribute("aria-label", ariaLabel);
+  drawNeuronImage(canvas, image, mode);
+  const caption = node("div", "neuron-image-caption");
+  caption.append(node("strong", "", title), node("span", "cell-sub", description));
+  card.append(canvas, caption);
+  return card;
+}
+
+function renderNeuronInspector(layer, visualization) {
+  const section = node("section", "neuron-layer-inspector");
+  const heading = node("div", "neuron-layer-heading");
+  const headingText = node("div", "");
+  headingText.append(
+    node("h4", "", "Нейроны слоя"),
+    node("p", "cell-sub", "Порядок фиксирован; цвет показывает post для выбранного примера."),
+  );
+  const activationValues = layerActivationValues(layer.id);
+  const finiteActivations = (activationValues || []).filter(Number.isFinite);
+  const activationMaximum = Math.max(0, ...finiteActivations.map(Math.abs));
+  heading.append(
+    headingText,
+    node("span", "mono-label", activationValues
+      ? `heatmap 0 … ${formatValue(activationMaximum)}`
+      : "heatmap появится после forward"),
+  );
+
+  let selectedIndex = selectedNeuronByLayer.get(layer.id) ?? 0;
+  if (selectedIndex < 0 || selectedIndex >= visualization.neuron_count) selectedIndex = 0;
+  selectedNeuronByLayer.set(layer.id, selectedIndex);
+
+  const body = node("div", "neuron-layer-body");
+  const matrixWrap = node("div", "neuron-matrix-wrap");
+  const matrix = node("div", "neuron-matrix");
+  const columns = Math.ceil(Math.sqrt(visualization.neuron_count));
+  matrix.style.setProperty("--neuron-columns", String(columns));
+  matrix.setAttribute("aria-label", `Нейроны слоя ${layer.id} в фиксированном порядке`);
+  for (let index = 0; index < visualization.neuron_count; index += 1) {
+    const activation = activationValues?.[index];
+    const selected = index === selectedIndex;
+    const neuronName = layer.id === "output" ? `класс ${index}` : `нейрон ${index}`;
+    const button = node("button", selected ? "neuron-cell neuron-cell-selected" : "neuron-cell", String(index));
+    button.type = "button";
+    button.setAttribute("aria-pressed", String(selected));
+    button.setAttribute("aria-label", `Выбрать ${neuronName} слоя ${layer.id}`);
+    button.title = activation == null
+      ? `${neuronName} · активация ещё не вычислена`
+      : `${neuronName} · post ${formatValue(activation)}`;
+    if (activation != null && Number.isFinite(activation)) {
+      button.style.background = heatColor(activation, activationMaximum);
+    }
+    button.addEventListener("click", () => {
+      selectedNeuronByLayer.set(layer.id, index);
+      renderSelectedLayer(currentModel);
+    });
+    matrix.append(button);
+  }
+  matrixWrap.append(matrix);
+
+  const preview = node("div", "neuron-image-panel");
+  const image = visualization.images[selectedIndex];
+  preview.append(node(
+    "strong",
+    "neuron-image-title",
+    layer.id === "output" ? `Класс ${selectedIndex} · нейрон ${selectedIndex}` : `Нейрон ${selectedIndex}`,
+  ));
+  const imageGrid = node(
+    "div",
+    visualization.mode === "input_filter" ? "neuron-image-grid" : "neuron-image-grid neuron-image-grid-single",
+  );
+  if (visualization.mode === "input_filter") {
+    const weightStats = neuronImageStats(image);
+    imageGrid.append(neuronImageCard(
+      image,
+      "input_filter",
+      "Веса",
+      `min ${formatValue(weightStats.minimum)} · max ${formatValue(weightStats.maximum)}`,
+      `Хитмапа входных весов нейрона ${selectedIndex} слоя ${layer.id}`,
+    ));
+    const input = modelDebugSnapshot?.input?.preview;
+    const hasMatchingInput = Array.isArray(input) && input.length === image.length
+      && input.every((row, index) => Array.isArray(row) && row.length === image[index].length);
+    if (hasMatchingInput) {
+      const contribution = image.map((row, y) => row.map((weight, x) => weight * input[y][x]));
+      const contributionStats = neuronImageStats(contribution);
+      imageGrid.append(neuronImageCard(
+        contribution,
+        "input_filter",
+        "Вклад input × weight",
+        `Σ ${formatValue(contributionStats.sum)} · без bias`,
+        `Хитмапа вклада input на веса нейрона ${selectedIndex} слоя ${layer.id}`,
+      ));
+    } else {
+      imageGrid.append(node("div", "neuron-image-unavailable cell-sub", "Вклад появится после выбора входа."));
+    }
+  } else {
+    imageGrid.append(neuronImageCard(
+      image,
+      visualization.mode,
+      "Максимально активирующий пример",
+      `test[${visualization.source_indices[selectedIndex]}] · максимум post ${formatValue(visualization.activation_values[selectedIndex])}`,
+      `Максимально активирующий test-пример нейрона ${selectedIndex} слоя ${layer.id}`,
+    ));
+  }
+  preview.append(imageGrid);
+  body.append(matrixWrap, preview);
+  section.append(heading, body);
+  return section;
+}
+
 function renderSelectedLayer(model) {
   const layer = model.layers.find(item => item.id === selectedLayerId) || model.layers[0];
   selectedLayerId = layer.id;
@@ -1208,6 +1458,15 @@ function renderSelectedLayer(model) {
     fact("Параметры", formatValue(layer.parameter_count || 0)),
   );
   inspector.append(header, facts);
+
+  const neuronVisualization = neuronVisualizations?.layers?.find(
+    item => item.layer_id === layer.id,
+  );
+  if (neuronVisualization) {
+    inspector.append(renderNeuronInspector(layer, neuronVisualization));
+  } else if (neuronVisualizationError) {
+    inspector.append(node("p", "notice notice-error model-notice", neuronVisualizationError));
+  }
 
   if (!layer.tensors.length) {
     inspector.append(node("p", "model-inline-empty", "У слоя нет сохранённых тензоров."));
@@ -1285,6 +1544,39 @@ async function loadModel(payload) {
   }
 }
 
+async function loadNeuronVisualizations(payload) {
+  const path = "neuron-visualizations.json";
+  const artifact = (payload.artifacts || []).find(item => item.path === path);
+  if (!artifact) {
+    if (neuronVisualizationSignature || neuronVisualizations || neuronVisualizationError) {
+      neuronVisualizationSignature = "";
+      neuronVisualizations = null;
+      neuronVisualizationError = "";
+      if (currentModel) renderSelectedLayer(currentModel);
+    }
+    return;
+  }
+  const signature = `${path}:${artifact.size_bytes}:${artifact.modified_at}`;
+  if (signature === neuronVisualizationSignature) return;
+  neuronVisualizationSignature = signature;
+  const token = ++neuronVisualizationLoadToken;
+  try {
+    const response = await fetch(`/api/runs/${encodedRunId}/artifacts/${path}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`API ответил ${response.status}`);
+    const payload = await response.json();
+    validateNeuronVisualizations(payload);
+    if (token !== neuronVisualizationLoadToken) return;
+    neuronVisualizations = payload;
+    neuronVisualizationError = "";
+    if (currentModel) renderSelectedLayer(currentModel);
+  } catch (error) {
+    if (token !== neuronVisualizationLoadToken) return;
+    neuronVisualizations = null;
+    neuronVisualizationError = `Не удалось прочитать визуализации нейронов: ${error.message}`;
+    if (currentModel) renderSelectedLayer(currentModel);
+  }
+}
+
 function renderArtifacts(items) {
   const container = document.querySelector("#artifact-list");
   container.replaceChildren();
@@ -1312,6 +1604,7 @@ function renderDetail(payload) {
   renderCharts(payload.metrics);
   renderArtifacts(payload.artifacts || []);
   loadModel(payload);
+  loadNeuronVisualizations(payload);
   setupRunControl(payload);
   setupXorTraining(payload);
   setupXorDebug(payload);

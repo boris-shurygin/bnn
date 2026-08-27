@@ -94,6 +94,13 @@ from bioplast.runner.model_debug import (
     load_model_debug_snapshot,
     write_model_debug_snapshot,
 )
+from bioplast.runner.neuron_visualizations import (
+    NEURON_VISUALIZATIONS_FILE,
+    NeuronVisualizationLayer,
+    NeuronVisualizations,
+    load_neuron_visualizations,
+    write_neuron_visualizations,
+)
 
 __all__ = [
     "CONTRACT_VERSION",
@@ -112,6 +119,9 @@ __all__ = [
     "ModelDebugClassScore",
     "ModelDebugLayerSnapshot",
     "ModelDebugSnapshot",
+    "NEURON_VISUALIZATIONS_FILE",
+    "NeuronVisualizationLayer",
+    "NeuronVisualizations",
     "RunEvent",
     "RunCancelled",
     "RunCommand",
@@ -145,6 +155,7 @@ __all__ = [
     "iter_events",
     "load_model_manifest",
     "load_model_debug_snapshot",
+    "load_neuron_visualizations",
     "load_activity",
     "load_recovery",
     "load_recovery_state",
@@ -168,6 +179,7 @@ __all__ = [
     "validate_run_config",
     "write_model_manifest",
     "write_model_debug_snapshot",
+    "write_neuron_visualizations",
     "write_recovery",
     "write_run_manifest",
     "write_training_checkpoint",

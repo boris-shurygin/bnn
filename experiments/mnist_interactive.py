@@ -1,8 +1,10 @@
 """Layer-by-layer inspection of a trained MNIST MLP.
 
 The browser submits one test-set index. The worker loads the parent checkpoint
-and dataset, then publishes only the selected 28x28 preview, top-k prediction
-and aggregate tensor summaries for completed layers.
+and dataset, then publishes the selected 28x28 preview, top-k prediction,
+compact activation vectors and aggregate tensor summaries for completed layers.
+A separate static artifact keeps first-layer filters and maximum-activation
+dataset examples.
 """
 
 from __future__ import annotations
@@ -21,6 +23,8 @@ from bioplast.runner import (
     ModelDebugClassScore,
     ModelDebugLayerSnapshot,
     ModelDebugSnapshot,
+    NeuronVisualizationLayer,
+    NeuronVisualizations,
     RunEvent,
     TensorSpec,
     append_event,
@@ -31,6 +35,7 @@ from bioplast.runner import (
     load_training_checkpoint,
     utc_offset_iso,
     write_model_debug_snapshot,
+    write_neuron_visualizations,
     write_recovery,
 )
 from experiments.mnist_mlp_backprop import MLP
@@ -57,6 +62,62 @@ def _source_run_dir(config: dict[str, Any], ctx) -> Path:
 
 def _summary(name: str, role: str, tensor: torch.Tensor) -> TensorSpec:
     return inspect_tensor(name, role, tensor, full_values_max_elements=0)
+
+
+def _activation(name: str, role: str, tensor: torch.Tensor) -> TensorSpec:
+    return inspect_tensor(name, role, tensor, full_values_max_elements=4096)
+
+
+def _neuron_visualizations(model: MLP, test_x: torch.Tensor, run_id: str) -> NeuronVisualizations:
+    if test_x.ndim != 2 or test_x.shape[1] != 784 or not test_x.shape[0]:
+        raise ContractError("визуализация нейронов MNIST требует непустой test tensor N×784")
+    value = test_x
+    layers: list[NeuronVisualizationLayer] = []
+    with torch.no_grad():
+        for index, layer in enumerate(model.layers):
+            last_layer = index == len(model.layers) - 1
+            preactivation = layer(value)
+            output = preactivation if last_layer else torch.relu(preactivation)
+            layer_id = (
+                "output"
+                if last_layer
+                else "hidden" if len(model.layers) == 2 else f"hidden_{index + 1}"
+            )
+            if index == 0:
+                images = layer.weight.detach().reshape(-1, 28, 28).cpu().tolist()
+                layers.append(
+                    NeuronVisualizationLayer(
+                        layer_id=layer_id,
+                        module_path=f"layers.{index}",
+                        mode="input_filter",
+                        images=tuple(
+                            tuple(tuple(float(pixel) for pixel in row) for row in image)
+                            for image in images
+                        ),
+                    )
+                )
+            else:
+                maxima, indices = output.max(dim=0)
+                images = test_x.index_select(0, indices).reshape(-1, 28, 28).cpu().tolist()
+                layers.append(
+                    NeuronVisualizationLayer(
+                        layer_id=layer_id,
+                        module_path=f"layers.{index}",
+                        mode="max_dataset_example",
+                        images=tuple(
+                            tuple(tuple(float(pixel) for pixel in row) for row in image)
+                            for image in images
+                        ),
+                        source_indices=tuple(int(item) for item in indices.cpu().tolist()),
+                        activation_values=tuple(float(item) for item in maxima.cpu().tolist()),
+                    )
+                )
+            value = output
+    return NeuronVisualizations(
+        run_id=run_id,
+        input_shape=(28, 28),
+        layers=tuple(layers),
+    )
 
 
 def _layer_from_dict(value: dict[str, Any]) -> ModelDebugLayerSnapshot:
@@ -205,6 +266,10 @@ def run(config: dict[str, Any], ctx) -> ExperimentResult:
     )
     if data.test_x.ndim != 2 or data.test_x.shape[1] != 784:
         raise ContractError("MNIST debug требует test tensor формы N×784")
+    write_neuron_visualizations(
+        ctx.run_dir,
+        _neuron_visualizations(model, data.test_x, ctx.run_id),
+    )
 
     max_inputs = config.get("max_inputs")
     if max_inputs is not None:
@@ -298,7 +363,7 @@ def run(config: dict[str, Any], ctx) -> ExperimentResult:
                 parameter_count=sum(parameter.numel() for parameter in layer.parameters()),
                 input_tensor=_summary("input", "activation_input", value),
                 preactivation_tensor=_summary("z", "preactivation", preactivation),
-                output_tensor=_summary("post", "activation_output", output),
+                output_tensor=_activation("post", "activation_output", output),
             )
             state["layers"].append(layer_snapshot.to_dict())
             completed += 1

@@ -2,7 +2,7 @@
 
 Запуск из корня проекта:
 
-    uv run uvicorn bioplast.viz.api:app --reload
+    uv run python -m bioplast.viz serve
 """
 
 from __future__ import annotations

@@ -180,12 +180,17 @@ class RunRepository:
         self._load_manifest(run_dir)
         artifacts: list[ArtifactInfo] = []
         for path in run_dir.rglob("*"):
-            if not path.is_file():
+            try:
+                if not path.is_file():
+                    continue
+                resolved = path.resolve()
+                if not resolved.is_relative_to(run_dir):
+                    continue  # симлинк наружу каталога никогда не становится артефактом
+                stat = resolved.stat()
+            except FileNotFoundError:
+                # Atomic writers briefly expose a temporary directory entry which
+                # can disappear between rglob/is_file/stat on Windows.
                 continue
-            resolved = path.resolve()
-            if not resolved.is_relative_to(run_dir):
-                continue  # симлинк наружу каталога никогда не становится артефактом
-            stat = resolved.stat()
             relative = path.relative_to(run_dir).as_posix()
             artifacts.append(
                 ArtifactInfo(

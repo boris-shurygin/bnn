@@ -49,7 +49,7 @@ code, pre, .mono-label, .run-title { font-family: "Cascadia Code", "SFMono-Regul
 .run-meta { color: var(--muted); display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; }
 
 .panel { background: linear-gradient(145deg, rgba(18,34,49,.94), rgba(11,24,35,.96)); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 14px 40px rgba(0,0,0,.17); }
-.panel + .panel, .detail-grid + .panel { margin-top: 20px; }
+.panel + .panel, .panel + .detail-grid, .detail-grid + .panel { margin-top: 20px; }
 .panel-heading { min-height: 68px; padding: 18px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .panel-heading h2 { font-size: 16px; margin: 0 0 3px; }
 .panel-heading p { font-size: 12px; }
@@ -148,6 +148,8 @@ textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; 
 .model-node { flex: 0 0 210px; min-height: 126px; display: flex; flex-direction: column; align-items: flex-start; gap: 7px; color: var(--text); text-align: left; border: 1px solid #315064; border-radius: 12px; background: linear-gradient(145deg, #14293a, #0b1a26); padding: 15px 16px; cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
 .model-node:hover { border-color: #4d788d; transform: translateY(-1px); }
 .model-node:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+.model-input-node { border-style: dashed; border-color: #536b7a; background: #0b1924; cursor: default; }
+.model-input-node:hover { border-color: #536b7a; transform: none; }
 .model-node-selected { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(80,214,208,.1), 0 12px 30px rgba(0,0,0,.2); }
 .model-node-id { color: var(--cyan); font: 700 12px/1.35 "Cascadia Code", Consolas, monospace; overflow-wrap: anywhere; }
 .model-node-type { font-size: 17px; }
@@ -160,6 +162,9 @@ textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; 
 .model-connections { min-height: 45px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border-top: 1px solid #213748; padding: 10px 14px; }
 .model-connection, .model-connection-empty { border: 1px solid #294256; border-radius: 999px; color: var(--muted); background: #0b1a26; padding: 4px 9px; font: 10px/1.4 "Cascadia Code", Consolas, monospace; }
 .model-connection-learning { color: var(--amber); border-color: #765b2e; }
+.model-selection-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; }
+.model-selection-with-input { grid-template-columns: minmax(250px, 320px) minmax(0, 1fr); }
+.model-selected-input { margin-top: 18px; }
 .layer-inspector { margin-top: 18px; border: 1px solid #294256; border-radius: 12px; background: rgba(9,20,30,.72); overflow: hidden; }
 .layer-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 20px; border-bottom: 1px solid #213748; }
 .layer-heading h3 { margin: 4px 0 0; font: 700 20px/1.2 "Cascadia Code", Consolas, monospace; }
@@ -172,6 +177,26 @@ textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; 
 .layer-fact:last-child { border-right: 0; }
 .layer-fact dt { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; }
 .layer-fact dd { margin: 6px 0 0; color: var(--text); font: 600 13px/1.4 "Cascadia Code", Consolas, monospace; overflow-wrap: anywhere; }
+.neuron-layer-inspector { border-bottom: 1px solid #213748; }
+.neuron-layer-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 16px 18px; }
+.neuron-layer-heading h4 { margin: 0 0 4px; font-size: 14px; }
+.neuron-layer-heading p { margin: 0; }
+.neuron-layer-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); gap: 18px; padding: 0 18px 18px; }
+.neuron-matrix-wrap { min-width: 0; overflow: auto; border: 1px solid #213748; border-radius: 10px; background: #08141e; padding: 12px; }
+.neuron-matrix { width: max-content; display: grid; grid-template-columns: repeat(var(--neuron-columns), 30px); gap: 4px; }
+.neuron-cell { width: 30px; aspect-ratio: 1; display: grid; place-items: center; color: #dceaf1; border: 1px solid #294256; border-radius: 5px; background: #132635; padding: 0; cursor: pointer; font: 9px/1 "Cascadia Code", Consolas, monospace; text-shadow: 0 1px 2px #071019; }
+.neuron-cell:hover { border-color: #6d91a5; }
+.neuron-cell:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.neuron-cell-selected { border-color: #f4fbff; box-shadow: 0 0 0 2px var(--cyan), 0 0 12px rgba(80,214,208,.35); }
+.neuron-image-panel { min-width: 0; display: grid; align-content: start; gap: 10px; }
+.neuron-image-title { text-align: center; }
+.neuron-image-grid { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: start; }
+.neuron-image-grid-single { grid-template-columns: minmax(0, 210px); justify-content: center; }
+.neuron-image-card { min-width: 0; display: grid; align-content: start; gap: 7px; }
+.neuron-image-canvas { display: block; width: min(100%, 168px); aspect-ratio: 1; justify-self: center; border: 1px solid #315064; border-radius: 9px; background: #071019; image-rendering: pixelated; }
+.neuron-image-caption { display: grid; gap: 4px; text-align: center; }
+.neuron-image-caption strong { font-size: 12px; }
+.neuron-image-unavailable { min-height: 168px; display: grid; place-items: center; text-align: center; border: 1px dashed #315064; border-radius: 9px; padding: 12px; }
 .tensor-tabs { display: flex; gap: 7px; overflow-x: auto; padding: 14px 18px 0; }
 .tensor-tab { color: var(--muted); border: 1px solid #294256; border-radius: 8px 8px 0 0; background: #0b1924; padding: 8px 13px; cursor: pointer; font: 11px/1.35 "Cascadia Code", Consolas, monospace; }
 .tensor-tab:hover { color: var(--text); }
@@ -353,20 +378,31 @@ textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; 
 .model-example-form { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
 .model-example-form label { display: grid; gap: 6px; color: var(--muted); }
 .model-example-form input { width: 180px; }
-.model-debug-grid { display: grid; grid-template-columns: minmax(250px, 320px) minmax(0, 1fr); gap: 16px; }
-.model-input-card, .model-flow-card, .model-debug-grid > article { padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: rgba(13,24,35,.75); }
+.model-flow-body { min-width: 0; display: grid; gap: 16px; padding: 18px 20px; }
+.model-input-card, .model-module-card { padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: rgba(13,24,35,.75); }
 #model-input-preview { display: block; width: min(100%, 280px); height: auto; margin: 12px auto; border: 1px solid var(--line); border-radius: 10px; image-rendering: pixelated; background: #000; }
 .model-module-hierarchy, .model-tensor-flow { display: grid; gap: 8px; }
 .module-tree-row { display: flex; align-items: baseline; gap: 10px; min-height: 28px; }
 .module-tree-leaf { color: var(--text); }
 .tensor-flow-layer { display: grid; gap: 9px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: #0d1c28; }
 .tensor-flow-heading { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-.tensor-flow-tensor { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 10px; font-size: .88rem; color: var(--muted); }
+.tensor-flow-table-scroll { overflow-x: auto; border: 1px solid #213748; border-radius: 9px; }
+.tensor-flow-table { width: 100%; min-width: 820px; border-collapse: collapse; table-layout: fixed; color: var(--muted); font: 11px/1.35 "Cascadia Code", Consolas, monospace; font-variant-numeric: tabular-nums; }
+.tensor-flow-table th, .tensor-flow-table td { padding: 8px 10px; border-right: 1px solid #1d3241; border-bottom: 1px solid #1d3241; text-align: right; white-space: nowrap; }
+.tensor-flow-table thead th { color: #a8bdca; background: #0e1d29; font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
+.tensor-flow-table th:first-child { width: 68px; text-align: left; }
+.tensor-flow-table th:nth-child(2) { width: 94px; }
+.tensor-flow-table th:nth-child(3) { width: 78px; }
+.tensor-flow-table tbody th { color: var(--text); background: #0b1924; }
+.tensor-flow-table tr:last-child th, .tensor-flow-table tr:last-child td { border-bottom: 0; }
+.tensor-flow-table th:last-child, .tensor-flow-table td:last-child { border-right: 0; }
 .tensor-flow-arrow { text-align: center; color: var(--cyan); font-size: 1.35rem; }
 .model-top-classes { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 
 @media (max-width: 800px) {
-  .model-debug-grid { grid-template-columns: 1fr; }
+  .model-selection-with-input { grid-template-columns: 1fr; gap: 0; }
+  .neuron-layer-body { grid-template-columns: 1fr; }
+  .neuron-image-panel { width: min(100%, 360px); justify-self: center; }
 }
 @media (max-width: 760px) {
   .shell { width: min(100% - 24px, 1440px); padding-top: 28px; }
@@ -411,7 +447,7 @@ textarea { resize: vertical; font-family: "Cascadia Code", Consolas, monospace; 
   .model-graph { padding: 18px 14px; }
   .model-node { flex-basis: 184px; }
   .model-edge { flex-basis: 54px; }
-  .layer-heading, .tensor-heading { align-items: flex-start; flex-direction: column; }
+  .layer-heading, .tensor-heading, .neuron-layer-heading { align-items: flex-start; flex-direction: column; }
   .layer-badges, .tensor-badges { justify-content: flex-start; }
   .model-facts { flex-wrap: wrap; }
   .model-facts .layer-fact { flex-basis: 50%; }

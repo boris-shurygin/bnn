@@ -164,39 +164,9 @@
         <button id="model-set-example" class="button button-primary" type="submit">Выбрать пример</button>
       </form>
       <div id="model-debug-message" class="notice notice-info">Выберите тестовый пример. Для послойного режима сначала нажмите «Пауза».</div>
-      <div class="model-debug-grid">
-        <article class="model-input-card">
-          <h3>Вход MNIST</h3>
-          <canvas id="model-input-preview" width="280" height="280" aria-label="Выбранная цифра MNIST"></canvas>
-          <div id="model-input-meta" class="cell-sub">Snapshot ещё не создан.</div>
-        </article>
-        <article>
-          <h3>Иерархия модулей</h3>
-          <div id="model-module-hierarchy" class="model-module-hierarchy"><p class="empty">Нет завершённых слоёв.</p></div>
-        </article>
-      </div>
-      <article class="model-flow-card">
-        <h3>Поток тензоров и агрегаты</h3>
-        <div id="model-tensor-flow" class="model-tensor-flow"><p class="empty">Нет завершённых слоёв.</p></div>
-      </article>
     </div>
     <div id="model-debug-error" class="notice notice-error hidden" role="alert"></div>
   </div>
-</section>
-
-<section class="detail-grid">
-  <article class="panel">
-    <div class="panel-heading"><h2>Параметры</h2><span class="mono-label">config.json</span></div>
-    <div id="config-table" class="kv-table"><p class="empty">Загрузка…</p></div>
-  </article>
-  <article class="panel">
-    <div class="panel-heading"><h2>Окружение</h2><span class="mono-label">env</span></div>
-    <div id="env-table" class="kv-table"><p class="empty">Загрузка…</p></div>
-  </article>
-  <article class="panel">
-    <div class="panel-heading"><h2>Код</h2><span class="mono-label">git</span></div>
-    <div id="git-table" class="kv-table"><p class="empty">Загрузка…</p></div>
-  </article>
 </section>
 
 <section class="panel model-panel" aria-labelledby="model-heading">
@@ -216,8 +186,48 @@
       <div id="model-graph" class="model-graph" aria-label="Граф слоёв модели"></div>
       <div id="model-connections" class="model-connections"></div>
     </div>
-    <article id="layer-inspector" class="layer-inspector" aria-live="polite"></article>
+    <div id="model-selection-workspace" class="model-selection-workspace">
+      <article id="model-selected-input" class="model-input-card model-selected-input hidden">
+        <h3>Вход MNIST</h3>
+        <canvas id="model-input-preview" width="280" height="280" aria-label="Выбранная цифра MNIST"></canvas>
+        <div id="model-input-meta" class="cell-sub">Snapshot ещё не создан.</div>
+      </article>
+      <article id="layer-inspector" class="layer-inspector" aria-live="polite"></article>
+    </div>
   </div>
+</section>
+
+<section id="model-flow-panel" class="panel model-flow-panel hidden" aria-labelledby="model-flow-heading">
+  <div class="panel-heading">
+    <div>
+      <h2 id="model-flow-heading">Поток тензоров и агрегаты</h2>
+      <p>Формы и статистики уже завершённых слоёв выбранного forward.</p>
+    </div>
+    <span class="mono-label">model_debug_snapshot</span>
+  </div>
+  <div class="model-flow-body">
+    <article id="model-module-card" class="model-module-card hidden">
+      <h3>Иерархия модулей</h3>
+      <p class="cell-sub">Показывается только для действительно вложенной структуры.</p>
+      <div id="model-module-hierarchy" class="model-module-hierarchy"><p class="empty">Нет завершённых слоёв.</p></div>
+    </article>
+    <div id="model-tensor-flow" class="model-tensor-flow"><p class="empty">Нет завершённых слоёв.</p></div>
+  </div>
+</section>
+
+<section id="run-metadata-grid" class="detail-grid">
+  <article class="panel">
+    <div class="panel-heading"><h2>Параметры</h2><span class="mono-label">config.json</span></div>
+    <div id="config-table" class="kv-table"><p class="empty">Загрузка…</p></div>
+  </article>
+  <article class="panel">
+    <div class="panel-heading"><h2>Окружение</h2><span class="mono-label">env</span></div>
+    <div id="env-table" class="kv-table"><p class="empty">Загрузка…</p></div>
+  </article>
+  <article class="panel">
+    <div class="panel-heading"><h2>Код</h2><span class="mono-label">git</span></div>
+    <div id="git-table" class="kv-table"><p class="empty">Загрузка…</p></div>
+  </article>
 </section>
 
 <section class="panel rerun-panel">

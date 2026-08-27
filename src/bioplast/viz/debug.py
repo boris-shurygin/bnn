@@ -141,7 +141,13 @@ def _mnist_config(
             "dataset_split": "test",
             "supports_step": True,
             "step_scope": "layer",
-            "views": ["module_hierarchy", "tensor_flow", "activation_summary"],
+            "views": [
+                "module_hierarchy",
+                "tensor_flow",
+                "activation_summary",
+                "neuron_heatmap",
+                "neuron_images",
+            ],
         },
     }
     if source_config.get("train_size") is not None:

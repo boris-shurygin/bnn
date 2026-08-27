@@ -21,11 +21,13 @@ V.13 заменила специальную фабрику XOR allowlist-рее
 Тот же `POST .../debug` теперь выбирает зарегистрированный adapter для
 `xor_backprop` или `mnist_mlp_backprop`; detail response сообщает
 `debug_adapter`, чтобы UI показывал подходящую кнопку и renderer capability.
+V.14 добавила принадлежащую приложению команду запуска без reloader и
+одно-командный e2e smoke реального HTTP API, очереди и browser DOM.
 
 Запуск из корня проекта:
 
 ```powershell
-uv run uvicorn bioplast.viz.api:app --reload
+uv run python -m bioplast.viz serve
 ```
 
 По умолчанию читается `./runs`. Другой каталог задаётся переменной окружения
@@ -37,8 +39,26 @@ OpenAPI доступен на `/docs`.
 ```powershell
 $env:BIOPLAST_RUN_WORKERS = "2"
 $env:BIOPLAST_DEBUG_WORKERS = "2"
-uv run uvicorn bioplast.viz.api:app --reload
+uv run python -m bioplast.viz serve
 ```
+
+`serve` всегда слушает только `127.0.0.1`; другой порт и каталог задаются
+`--port`/`--runs-dir`. Для разработки шаблонов прежний запуск Uvicorn с
+`--reload` остаётся допустим, но воспроизводимый пользовательский путь использует
+один процесс и lifespan `RunSupervisor`.
+
+Сквозная проверка стенда запускается отдельно:
+
+```powershell
+uv run python -m bioplast.viz smoke
+```
+
+Она создаёт во временном каталоге малый MNIST, повторяет прогон через HTTP,
+запускает зарегистрированную debug-сессию и проверяет динамический DOM каталога,
+исходной/debug-карточек MNIST, XOR train-step/debug и сравнения настоящим
+Chrome/Chromium/Edge. Путь к браузеру можно явно задать через
+`BIOPLAST_BROWSER` или `--browser`; отсутствие браузера завершает команду
+понятной ошибкой, а не ложным успехом.
 
 Таймаут отсутствия пользователя по умолчанию — 1800 секунд и настраивается
 `BIOPLAST_DEBUG_INACTIVE_TIMEOUT_SEC`. Периоды worker heartbeat/stale и grace

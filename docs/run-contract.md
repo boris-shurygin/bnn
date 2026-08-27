@@ -235,11 +235,24 @@ V.13 добавляет общий `kind: model_debug_snapshot` и событи�
 После каждой атомарной фазы `forward_layer` snapshot содержит все уже
 завершённые слои. Запись слоя включает стабильный `layer_id`, полный
 `module_path`, тип, activation, число параметров и три `TensorSpec`:
-`activation_input`, `preactivation` и `activation_output`. Эти тензоры всегда
-имеют `value_mode: summary`: форма, dtype, число finite/non-finite, min/max,
-mean/std, L1/L2 и sparsity. Полные активации и параметры в snapshot не
-встраиваются. `module_path` позволяет renderer построить иерархию, а порядок
-слоёв — поток тензоров без полного графа нейронов.
+`activation_input`, `preactivation` и `activation_output`. Все три содержат
+форму, dtype, число finite/non-finite, min/max, mean/std, L1/L2 и sparsity.
+`activation_input` и `preactivation` остаются `value_mode: summary`, а
+`activation_output` дополнительно содержит полный bounded-вектор `post`, если
+в нём не больше 4096 элементов. Он нужен для heatmap нейронов выбранного слоя;
+большие активации и параметры в snapshot не встраиваются. `module_path`
+позволяет renderer построить иерархию, а порядок слоёв — поток тензоров без
+полного графа связей.
+
+Отдельный атомарный `neuron-visualizations.json` имеет заголовок
+`kind: neuron_visualizations`, `input_shape`, `dataset_split` и записи всех
+вычисляемых слоёв в стабильном порядке нейронов. Первый скрытый слой использует
+режим `input_filter`: каждая строка `weight` имеет форму 28×28. Следующие
+скрытые слои и output используют `max_dataset_example`: для каждого нейрона
+сохраняются test-index, максимальный `post` и само входное изображение, которое
+дало этот максимум. У output индекс нейрона совпадает с индексом класса.
+Артефакт вычисляется debug-worker'ом из checkpoint и датасета один раз; API и
+браузер checkpoint не десериализуют.
 
 Последний слой дополнительно публикует prediction и top-3 softmax-класса.
 Worker загружает родительский checkpoint и MNIST внутри собственного процесса;
@@ -247,7 +260,7 @@ API видит только исходный `model.json`, allowlist adapter и 
 Snapshot записывается атомарно перед append-only событием, recovery хранит
 event cursor и завершённые агрегаты. После crash-window adapter дочитывает
 хвост событий и детерминированно пересчитывает нужную промежуточную активацию
-из выбранного входа, не сохраняя полный tensor в JSON.
+из выбранного входа без доступа браузера к живому tensor.
 
 ## `checkpoint.pt`
 
@@ -309,3 +322,14 @@ step budget, затем скрытый и выходной слой являют
 публикуют recovery после законченного шага XOR или batch MNIST; V.12 публикует
 из той же XOR-фазы train-step snapshot и event, не вводя второй алгоритм
 исполнения.
+
+## Сквозная проверка контракта
+
+V.14 не вводит новую schema version: она проверяет совместную работу уже
+зафиксированных файловых границ. Настоящий restart MNIST debug после первого
+слоя создаёт новый supervisor/attempt и подтверждает продолжение `seq = 1, 2,
+3` без повторной публикации input или hidden snapshot. Одно-командный browser
+smoke создаёт исходный и повторный MNIST-прогоны через реальный main pool,
+дочернюю debug-сессию через debug worker, читает events/artifacts по HTTP и
+проверяет динамический DOM шести экранов настоящим Chromium-браузером, включая
+MNIST tensor flow, XOR train-step и завершённый XOR forward.

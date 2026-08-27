@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -185,6 +186,30 @@ def test_run_card_contains_config_metrics_and_artifacts(client):
         "metrics.json",
         "run.log",
     }
+
+
+def test_artifact_listing_skips_file_removed_during_stat(runs_dir, monkeypatch):
+    run_id = "20260808-143012-xor-s0"
+    volatile = runs_dir / run_id / ".activity.json.writer.tmp"
+    volatile.write_text("temporary", encoding="utf-8")
+    original_stat = Path.stat
+    volatile_stat_calls = 0
+
+    def disappearing_stat(path, *args, **kwargs):
+        nonlocal volatile_stat_calls
+        if path == volatile:
+            volatile_stat_calls += 1
+            if volatile_stat_calls > 1:
+                volatile.unlink(missing_ok=True)
+                raise FileNotFoundError(volatile)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", disappearing_stat)
+
+    artifacts = RunRepository(runs_dir).list_artifacts(run_id)
+
+    assert volatile_stat_calls > 1
+    assert {item.path for item in artifacts} == {"config.json", "metrics.json", "run.log"}
 
 
 def test_metrics_and_paginated_log(client):

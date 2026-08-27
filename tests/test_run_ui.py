@@ -127,6 +127,8 @@ def test_detail_page_contains_model_graph_layer_and_tensor_views(tmp_path):
     assert 'id="layer-inspector"' in page.text
     assert "validateModelPayload" in script.text
     assert "renderSelectedLayer" in script.text
+    assert "modelInputNode" in script.text
+    assert 'node("span", "model-node-id", "input")' in script.text
     assert "renderTensorTable" in script.text
     assert "renderTensorHeatmap" in script.text
     assert "Батч снимка" in script.text
@@ -136,6 +138,7 @@ def test_detail_page_contains_model_graph_layer_and_tensor_views(tmp_path):
     assert "Это нормальное состояние для старых прогонов" in script.text
     assert "torch.load" not in script.text
     assert ".model-node-selected" in css.text
+    assert ".model-input-node" in css.text
     assert ".tensor-values-table" in css.text
     assert ".tensor-heatmap-cell" in css.text
 
@@ -173,16 +176,39 @@ def test_detail_page_contains_capability_driven_mnist_tensor_flow(tmp_path):
     assert 'id="start-model-debug"' in page.text
     assert 'id="model-example-index"' in page.text
     assert 'id="model-input-preview"' in page.text
+    assert 'id="model-flow-panel" class="panel model-flow-panel hidden"' in page.text
+    assert 'class="model-flow-body"' in page.text
+    assert 'id="model-selection-workspace" class="model-selection-workspace"' in page.text
+    assert 'id="model-selected-input" class="model-input-card model-selected-input hidden"' in page.text
+    assert 'id="model-module-card" class="model-module-card hidden"' in page.text
     assert 'id="model-module-hierarchy"' in page.text
     assert 'id="model-tensor-flow"' in page.text
     assert 'renderer === "tensor_flow_v1"' in script.text
     assert "payload.debug_adapter?.renderer" in script.text
     assert "validateModelDebugSnapshot" in script.text
     assert "renderModelModuleHierarchy" in script.text
+    assert 'split(".").length > 2' in script.text
     assert "renderModelTensorFlow" in script.text
+    assert "renderTensorFlowTable" in script.text
+    assert "validateNeuronVisualizations" in script.text
+    assert "renderNeuronInspector" in script.text
+    assert "layerActivationValues" in script.text
+    assert '"Вклад input × weight"' in script.text
+    assert "weight * input[y][x]" in script.text
+    assert '["тензор", "форма", "dtype", "min", "max", "mean", "std", "L2", "sparsity"]' in script.text
     assert 'issueControl("set_input", null, [value])' in script.text
-    assert ".model-debug-grid" in css.text
+    assert ".model-selection-with-input" in css.text
+    assert ".model-flow-body" in css.text
     assert ".tensor-flow-layer" in css.text
+    assert ".tensor-flow-table" in css.text
+    assert "table-layout: fixed" in css.text
+    assert ".neuron-matrix" in css.text
+    assert ".neuron-cell-selected" in css.text
+    assert ".neuron-image-canvas" in css.text
+    assert ".neuron-image-grid" in css.text
+    assert page.text.index('id="model-debug-panel"') < page.text.index('class="panel model-panel"')
+    assert page.text.index('class="panel model-panel"') < page.text.index('id="model-flow-panel"')
+    assert page.text.index('id="model-flow-panel"') < page.text.index('id="run-metadata-grid"')
 
 
 def test_detail_page_contains_xor_training_step_animation(tmp_path):
