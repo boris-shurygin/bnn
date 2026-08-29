@@ -16,6 +16,7 @@ let logMissing = false;
 let controlPollLoading = false;
 let controlCommandLoading = false;
 let controlRevision = 0;
+let controlErrorSticky = false;
 let currentControl = null;
 let rerunPreview = null;
 const rerunInputs = new Map();
@@ -1709,10 +1710,12 @@ async function loadControl() {
     if (!response.ok) throw new Error(payload.detail || `API ответил ${response.status}`);
     if (revision === controlRevision) {
       renderControl(payload);
-      showNotice("#control-error", "");
+      if (!controlErrorSticky) showNotice("#control-error", "");
     }
   } catch (error) {
-    showNotice("#control-error", `Не удалось прочитать управление: ${error.message}`);
+    if (!controlErrorSticky) {
+      showNotice("#control-error", `Не удалось прочитать управление: ${error.message}`);
+    }
   } finally {
     controlPollLoading = false;
   }
@@ -1722,6 +1725,8 @@ async function issueControl(command, delayMs = null, inputValues = null) {
   if (controlCommandLoading) return false;
   controlCommandLoading = true;
   controlRevision += 1;
+  controlErrorSticky = false;
+  showNotice("#control-error", "");
   if (currentControl) renderControl(currentControl);
   const body = { command };
   if (delayMs !== null) body.delay_ms = delayMs;
@@ -1736,11 +1741,13 @@ async function issueControl(command, delayMs = null, inputValues = null) {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || `API ответил ${response.status}`);
     renderControl(payload.control);
+    controlErrorSticky = false;
     showNotice("#control-error", "");
     fetchDetail();
     succeeded = true;
   } catch (error) {
-    showNotice("#control-error", error.message);
+    controlErrorSticky = true;
+    showNotice("#control-error", `Команда не выполнена: ${error.message}`);
   } finally {
     controlCommandLoading = false;
     if (currentControl) renderControl(currentControl);

@@ -158,6 +158,8 @@ def test_detail_page_contains_interactive_xor_controls_and_neuron_graph(tmp_path
     assert 'issueControl("set_input"' in script.text
     assert 'submit.textContent = xorInputLoading ? "Подаём вход…" : "Подать вход"' in script.text
     assert "controlRevision" in script.text
+    assert "controlErrorSticky" in script.text
+    assert "Команда не выполнена:" in script.text
     assert "xorForwardPending" in script.text
     assert "finally" in script.text
     assert "renderXorNetwork" in script.text

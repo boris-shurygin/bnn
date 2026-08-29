@@ -85,6 +85,15 @@ def test_debug_session_hibernates_and_resumes_same_run_without_duplicate_events(
         assert first_state["safe_point_cursor"] == "waiting_input"
         assert first_payload["session"]["event_seq"] == 0
         _wait_until(lambda: supervisor.pending == 0, "supervisor не освободил debug process")
+        # Reproduce the restart window where suspended is already durable but
+        # the exiting worker's fresh lease has not disappeared yet.
+        claim_worker(
+            child,
+            supervisor_id="exiting-supervisor",
+            attempt=1,
+            pool_kind="debug",
+            exclusive=True,
+        )
 
         response = client.post(
             f"/api/runs/{run_id}/control",

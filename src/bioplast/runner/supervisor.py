@@ -16,6 +16,7 @@ from threading import Event, Lock, Thread
 from typing import Any
 
 from bioplast.runner.contracts import (
+    ContractError,
     RunStatus,
     load_run_manifest,
     utc_offset_iso,
@@ -90,14 +91,20 @@ def _supervised_worker(
         or int(lease.get("attempt", -1)) != attempt
     ):
         raise RuntimeError("worker не получил действительную lease supervisor")
-    with _WorkerHeartbeat(run_dir, lease, heartbeat_sec):
-        run_prepared(
-            run_dir,
-            resume=resume,
-            attempt=attempt,
-            pool_kind=pool_kind,
-            debug_inactive_timeout_sec=activity_timeout_sec,
-        )
+    try:
+        with _WorkerHeartbeat(run_dir, lease, heartbeat_sec):
+            run_prepared(
+                run_dir,
+                resume=resume,
+                attempt=attempt,
+                pool_kind=pool_kind,
+                debug_inactive_timeout_sec=activity_timeout_sec,
+            )
+    finally:
+        # The child owns this lease and must release it itself. Relying only on
+        # the supervisor monitor leaves a visible suspended -> resume race and
+        # strands a fresh lease when the server exits just after hibernation.
+        clear_worker_lease(run_dir, attempt=attempt)
     return {"run_dir": str(run_dir), "status": load_run_manifest(run_dir).status.value}
 
 
@@ -195,7 +202,7 @@ class RunSupervisor:
                 raise RuntimeError(f"resume недоступен: {availability.reason}")
             if is_debug:
                 touch_activity(path, timeout_sec=self.debug_inactive_timeout_sec)
-                if path not in self._queued and path not in self._debug_processes:
+                if path not in self._queued:
                     self._debug_queue.append((path, True))
                     self._queued.add(path)
                     self._dispatch_debug_locked()
@@ -359,21 +366,38 @@ class RunSupervisor:
         if not self._accepting:
             return
         context = multiprocessing.get_context("spawn")
-        while self._debug_queue and len(self._debug_processes) < self.debug_workers:
+        candidates = len(self._debug_queue)
+        for _ in range(candidates):
+            if len(self._debug_processes) >= self.debug_workers:
+                break
             path, resume = self._debug_queue.popleft()
-            self._queued.discard(path)
             manifest = load_run_manifest(path)
             expected = {RunStatus.SUSPENDED, RunStatus.INTERRUPTED} if resume else {RunStatus.QUEUED}
             if manifest.status not in expected:
+                self._queued.discard(path)
                 continue
+            lease = load_worker_lease(path)
+            if lease is not None:
+                if not worker_lease_stale(path, stale_sec=self.stale_sec):
+                    self._debug_queue.append((path, resume))
+                    continue
+                clear_worker_lease(path, attempt=int(lease["attempt"]))
             attempt = self._next_attempt(path)
-            claim_worker(
-                path,
-                supervisor_id=self.instance_id,
-                attempt=attempt,
-                pool_kind="debug",
-                exclusive=True,
-            )
+            try:
+                claim_worker(
+                    path,
+                    supervisor_id=self.instance_id,
+                    attempt=attempt,
+                    pool_kind="debug",
+                    exclusive=True,
+                )
+            except ContractError:
+                # Another supervisor may claim the session after our lease
+                # check. Keep the wake request queued; exclusive claim remains
+                # the authority and the API command need not fail transiently.
+                self._debug_queue.append((path, resume))
+                continue
+            self._queued.discard(path)
             process = context.Process(
                 target=_debug_worker_entry,
                 args=(
